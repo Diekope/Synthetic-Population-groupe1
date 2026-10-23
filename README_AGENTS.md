@@ -128,6 +128,9 @@ et affiche celui qu'il utilise.
 La GUI écoute sur `127.0.0.1` par défaut, **sans authentification**. Ne l'expose
 pas sur un réseau public : elle peut appeler ton fournisseur LLM avec ta clé.
 
+Le sélecteur de modèle liste les modèles Ollama installés avec leur taille ; les
+modèles d'embedding sont masqués.
+
 ---
 
 ## 5. Conversation

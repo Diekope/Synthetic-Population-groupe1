@@ -114,8 +114,14 @@ def ollama_models() -> list[dict]:
             data = json.load(r)
     except (urllib.error.URLError, TimeoutError, ValueError):
         return []
-    return [{"name": m.get("name", "?"), "size_gb": round(m.get("size", 0) / 1e9, 2)}
-            for m in data.get("models", [])]
+    out = []
+    for m in data.get("models", []):
+        name = m.get("name", "?")
+        # Les modèles d'embedding ne servent pas à discuter.
+        if any(h in name.lower() for h in ("embed", "minilm", "bge", "nomic", "e5")):
+            continue
+        out.append({"name": name, "size_gb": round(m.get("size", 0) / 1e9, 2)})
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -228,6 +234,7 @@ INDEX = r"""<!doctype html>
   .chip b{color:var(--ink)}
   .spacer{flex:1}
   .ctrl{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .ctrl select#model{max-width:320px}
   select,input[type=text],input[type=search]{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
   .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;display:inline-block}
   .dot.ok{background:#16a34a}.dot.bad{background:#dc2626}
@@ -309,8 +316,7 @@ INDEX = r"""<!doctype html>
       <option value="ollama">ollama</option>
       <option value="openai">openai</option>
     </select>
-    <input id="model" list="models" placeholder="modèle" size="16">
-    <datalist id="models"></datalist>
+    <select id="model" title="modèle"></select>
   </div>
 </header>
 
@@ -378,6 +384,8 @@ const COLOR = { unique: "#a8b2bc", clone: "#c2410c" };
 
 function provider(){ return $("#provider").value; }
 function model(){ return $("#model").value.trim(); }
+let AVAILABLE = { ollama: [], suggestions: [] };
+const OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"];
 
 function pct(x){ return (100*x).toFixed(1) + " %"; }
 function fmt(x, d=2){ return Number(x).toFixed(d).replace(".", ","); }
@@ -662,27 +670,39 @@ $("#input").addEventListener("keydown", e => {
 });
 $("#reset").onclick = () => { S.history = []; renderChat(); $("#lat").textContent = ""; };
 
-function syncModel(){
+function fillModels(preferred){
+  const sel = $("#model");
   const p = provider();
-  localStorage.setItem("provider", p);
-  const defaults = { mock: "mock", openai: "gpt-4o-mini", ollama: "llama3.2:1b" };
-  const cur = model();
-  if (!cur || Object.values(defaults).includes(cur)) $("#model").value = defaults[p];
+  const keep = preferred || sel.value || localStorage.getItem("model") || "";
+  sel.innerHTML = "";
+  if (p === "ollama"){
+    for (const m of AVAILABLE.ollama)
+      sel.append(new Option(`${m.name} · ${m.size_gb} Go`, m.name));
+    if (!sel.options.length) sel.append(new Option("llama3.2:1b", "llama3.2:1b"));
+  } else if (p === "openai"){
+    for (const m of OPENAI_MODELS) sel.append(new Option(m, m));
+  } else {
+    sel.append(new Option("mock", "mock"));
+  }
+  const names = Array.from(sel.options, o => o.value);
+  const def = { mock: "mock", openai: "gpt-4o-mini", ollama: "llama3.2:1b" }[p];
+  sel.value = names.includes(keep) ? keep : (names.includes(def) ? def : names[0]);
+  localStorage.setItem("model", sel.value);
 }
-$("#provider").onchange = () => { syncModel(); health(); };
+$("#provider").onchange = () => { fillModels(); health(); };
 $("#model").onchange = () => localStorage.setItem("model", model());
 
 async function loadModels(){
   try{
     const d = await fetch("/api/models").then(r => r.json());
-    const dl = $("#models"); dl.innerHTML = "";
-    for (const m of d.ollama) dl.append(new Option(`${m.name} (${m.size_gb} Go)`, m.name));
-    for (const m of d.suggestions) if (!d.ollama.some(x => x.name === m)) dl.append(new Option(m, m));
+    AVAILABLE = d;
+    fillModels(localStorage.getItem("model"));
     $("#status").className = "dot " + (d.ollama_up ? "ok" : "");
     $("#status").title = d.ollama_up ? "Ollama joignable" : "Ollama non joignable (mode mock disponible)";
     if (!SAVED_PROVIDER){
       $("#provider").value = d.ollama_up ? "ollama" : "mock";
-      syncModel(); health();
+      fillModels();
+      health();
     }
   }catch(e){ /* silencieux */ }
 }
@@ -698,7 +718,7 @@ async function health(){
 
 const SAVED_PROVIDER = localStorage.getItem("provider");
 $("#provider").value = SAVED_PROVIDER || "mock";
-$("#model").value = localStorage.getItem("model") || ""; syncModel();
+fillModels(localStorage.getItem("model"));
 new ResizeObserver(() => renderScatter()).observe($("#scatter"));
 boot();
 </script>

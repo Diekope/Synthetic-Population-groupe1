@@ -52,6 +52,8 @@ class GuiTest(unittest.TestCase):
         html = self._get("/", raw=True).decode()
         self.assertIn("Population synthétique", html)
         self.assertIn("/api/chat", html)
+        self.assertIn('id="model"', html)
+        self.assertNotIn("<datalist", html)
 
     def test_agents(self):
         data = self._get("/api/agents")
