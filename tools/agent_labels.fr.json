@@ -1,0 +1,62 @@
+{
+  "_comment": "Interprétation plausible des attributs A0..A11 (les libellés d'origine ne figurent pas dans le repo). Modifie ce fichier si tu connais la vraie sémantique, puis relance build_agents.py.",
+  "A0": "diplôme le plus élevé",
+  "A0=v0": "CAP/BEP",
+  "A0=v1": "bac ou plus",
+  "A0=v2": "sans diplôme",
+
+  "A1": "sexe",
+  "A1=v0": "homme",
+  "A1=v1": "autre ou non précisé",
+  "A1=v2": "femme",
+
+  "A2": "lieu de résidence",
+  "A2=v0": "commune rurale",
+  "A2=v1": "outre-mer",
+  "A2=v2": "grande ville",
+
+  "A3": "statut d'occupation du logement",
+  "A3=v0": "propriétaire",
+  "A3=v1": "logé(e) gratuitement",
+  "A3=v2": "locataire",
+
+  "A4": "situation familiale",
+  "A4=v0": "célibataire",
+  "A4=v1": "en couple",
+  "A4=v2": "divorcé(e) ou veuf(ve)",
+
+  "A5": "revenu mensuel du ménage",
+  "A5=v0": "moins de 1 500 €",
+  "A5=v1": "de 1 500 à 2 500 €",
+  "A5=v2": "plus de 2 500 €",
+
+  "A6": "nationalité",
+  "A6=v0": "autre pays de l'Union européenne",
+  "A6=v1": "hors Union européenne",
+  "A6=v2": "française",
+
+  "A7": "enfants à charge",
+  "A7=v0": "oui",
+  "A7=v1": "non",
+  "A7=v2": "non renseigné",
+
+  "A8": "accès à Internet à domicile",
+  "A8=v0": "non",
+  "A8=v1": "oui",
+  "A8=v2": "ne sait pas",
+
+  "A9": "classe d'âge",
+  "A9=v0": "18 à 39 ans",
+  "A9=v1": "40 à 59 ans",
+  "A9=v2": "60 ans et plus",
+
+  "A10": "équipement automobile",
+  "A10=v0": "aucune voiture",
+  "A10=v1": "deux voitures ou plus",
+  "A10=v2": "une voiture",
+
+  "A11": "état de santé perçu",
+  "A11=v0": "très bon",
+  "A11=v1": "bon",
+  "A11=v2": "limité"
+}

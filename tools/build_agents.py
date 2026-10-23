@@ -14,12 +14,17 @@ donc elle est bien dérivée des attributs, pas d'un compteur arbitraire.
 Sorties (dans --out, défaut `agents/`) :
   agents.csv    : id, identity_key, prenom, nom, A0..A11
   agents.jsonl  : un agent par ligne, avec son prompt système prêt pour un LLM
+  labels.json   : libellés lisibles, consommés par la GUI
   manifest.json : contrôles (marges, unicité, seed, labels)
+
+Les libellés de `tools/agent_labels.fr.json` sont appliqués par défaut. Ils
+rendent le prompt parlant (`"classe d'âge : 40 à 59 ans"`) et les prénoms
+cohérents avec le sexe. `--no-labels` revient aux `A0=v1` bruts.
 
 Usage :
   uv run python tools/build_agents.py constraint_cells.csv population.csv
   uv run python tools/build_agents.py constraint_cells.csv population.csv \
-      --labels tools/agent_labels.example.json --seed 7 --out agents
+      --labels mon_fichier.json --seed 7 --out agents
 """
 from __future__ import annotations
 
@@ -33,14 +38,19 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-PRENOMS = [
-    "Camille", "Alex", "Sam", "Charlie", "Dominique", "Claude", "Maxime", "Léa",
-    "Hugo", "Inès", "Nathan", "Chloé", "Louis", "Manon", "Gabriel", "Sarah",
-    "Jules", "Alice", "Adam", "Louise", "Raphaël", "Jade", "Arthur", "Emma",
-    "Paul", "Lina", "Victor", "Mila", "Simon", "Zoé", "Antoine", "Nina",
-    "Baptiste", "Juliette", "Étienne", "Clara", "Théo", "Margot", "Nicolas", "Élise",
-    "Yanis", "Anna", "Karim", "Sofia", "Mehdi", "Awa", "Lucas", "Yasmine",
+PRENOMS_F = [
+    "Léa", "Inès", "Chloé", "Manon", "Sarah", "Alice", "Louise", "Jade",
+    "Emma", "Lina", "Mila", "Zoé", "Nina", "Juliette", "Clara", "Margot",
+    "Élise", "Anna", "Sofia", "Awa", "Yasmine", "Camille", "Dominique", "Claude",
 ]
+
+PRENOMS_M = [
+    "Hugo", "Nathan", "Louis", "Gabriel", "Jules", "Adam", "Raphaël", "Arthur",
+    "Paul", "Victor", "Simon", "Antoine", "Baptiste", "Étienne", "Théo", "Nicolas",
+    "Yanis", "Karim", "Mehdi", "Lucas", "Maxime", "Alex", "Sam", "Charlie",
+]
+
+PRENOMS_N = ["Camille", "Sam", "Charlie", "Dominique", "Claude", "Alex"]
 
 NOMS = [
     "Martin", "Bernard", "Dubois", "Thomas", "Robert", "Richard", "Petit", "Durand",
@@ -107,15 +117,49 @@ def persona_prompt(agent: dict, labels: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def assign_names(n: int, rng: random.Random) -> list[tuple[str, str]]:
-    combos = [(p, nom) for p in PRENOMS for nom in NOMS]
-    if len(combos) < n:
-        raise SystemExit(
-            f"Pas assez de combinaisons prénom/nom : {len(combos)} < {n}. "
-            "Ajoute des entrées dans PRENOMS/NOMS."
-        )
-    rng.shuffle(combos)
-    return combos[:n]
+def name_pool(row: dict[str, str], labels: dict[str, str]) -> str:
+    """Catégorie de prénoms cohérente avec le sexe, si les libellés le disent."""
+    sex = labels.get("A1=" + row.get("A1", ""), "").lower()
+    if "femme" in sex:
+        return "f"
+    if "homme" in sex:
+        return "m"
+    return "n" if sex else "all"
+
+
+def assign_names(rows: list[dict[str, str]], labels: dict[str, str],
+                 rng: random.Random) -> list[tuple[str, str]]:
+    pools = {"f": PRENOMS_F, "m": PRENOMS_M, "n": PRENOMS_N,
+             "all": PRENOMS_F + PRENOMS_M + PRENOMS_N}
+    groups: dict[str, list[int]] = {}
+    for i, row in enumerate(rows):
+        groups.setdefault(name_pool(row, labels), []).append(i)
+
+    out: list[tuple[str, str] | None] = [None] * len(rows)
+    used: set[tuple[str, str]] = set()
+    for key, idxs in groups.items():
+        pool = pools[key]
+        combos = [(p, nom) for p in pool for nom in NOMS]
+        if len(combos) < len(idxs):
+            raise SystemExit(
+                f"Pas assez de combinaisons prénom/nom pour {len(idxs)} agents "
+                f"({len(combos)} disponibles). Ajoute des noms dans NOMS.")
+        rng.shuffle(combos)
+        picked: list[tuple[str, str]] = []
+        for combo in combos:
+            if combo in used:
+                continue
+            used.add(combo)
+            picked.append(combo)
+            if len(picked) == len(idxs):
+                break
+        if len(picked) < len(idxs):
+            raise SystemExit(
+                f"Pas assez de combinaisons prénom/nom uniques pour {len(idxs)} agents. "
+                "Ajoute des noms dans NOMS.")
+        for i, name in zip(idxs, picked):
+            out[i] = name
+    return out  # type: ignore[return-value]
 
 
 def build(constraints: Path, population_csv: Path, out: Path, seed: int,
@@ -135,10 +179,16 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
         )
 
     rng = random.Random(seed)
-    names = assign_names(len(rows), rng)
     labels = {}
+    labels_ref = None
     if labels_path:
         labels = json.loads(labels_path.read_text(encoding="utf-8"))
+        try:
+            labels_ref = str(labels_path.resolve().relative_to(
+                Path(__file__).resolve().parent.parent))
+        except ValueError:
+            labels_ref = str(labels_path)
+    names = assign_names(rows, labels, rng)
 
     agents = []
     for i, (row, (prenom, nom)) in enumerate(zip(rows, names), start=1):
@@ -189,10 +239,18 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
         "seed": seed,
         "identity_attributes": ["prenom", "nom"],
         "constrained_attributes": attrs,
-        "labels_file": str(labels_path) if labels_path else None,
+        "labels_file": labels_ref,
     }
     (out / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # Libellés lisibles pour la GUI (le prompt, lui, est déjà écrit dans agents.jsonl).
+    labels_out = out / "labels.json"
+    if labels:
+        labels_out.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + "\n",
+                              encoding="utf-8")
+    elif labels_out.exists():
+        labels_out.unlink()
     return manifest
 
 
@@ -203,11 +261,18 @@ def main() -> int:
     p.add_argument("population", type=Path)
     p.add_argument("--out", type=Path, default=Path("agents"))
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--labels", type=Path, default=None,
-                   help="JSON {attribut: label, 'A0=v1': label_valeur}")
+    default_labels = Path(__file__).resolve().parent / "agent_labels.fr.json"
+    p.add_argument("--labels", type=Path, default=default_labels,
+                   help="JSON {attribut: label, 'A0=v1': label_valeur} "
+                        f"(défaut : {default_labels.name})")
+    p.add_argument("--no-labels", action="store_true", help="attributs affichés bruts (A0=v1)")
     args = p.parse_args()
 
-    m = build(args.constraints, args.population, args.out, args.seed, args.labels)
+    labels = None if args.no_labels else args.labels
+    if labels is not None and not labels.exists():
+        print(f"Fichier de libellés introuvable : {labels}", file=sys.stderr)
+        return 1
+    m = build(args.constraints, args.population, args.out, args.seed, labels)
     print(f"{m['n_agents']} agents -> {args.out}/agents.csv et agents.jsonl")
     print(f"  personas contraintes distinctes : {m['distinct_base_personas']}")
     print(f"  identités distinctes            : {m['distinct_agents']}")

@@ -49,6 +49,8 @@ class AgentPipelineTest(unittest.TestCase):
     def test_unique_identities(self):
         keys = {a["identity_key"] for a in self.agents}
         self.assertEqual(len(keys), 500)
+        names = {(a["prenom"], a["nom"]) for a in self.agents}
+        self.assertEqual(len(names), 500)
 
     def test_unique_full_attribute_vectors(self):
         vectors = {tuple(sorted(a["attributes"].items())) for a in self.agents}
@@ -65,8 +67,29 @@ class AgentPipelineTest(unittest.TestCase):
         self.assertIn(agent["nom"], agent["persona"])
         self.assertNotIn("Identité stable", agent["persona"])
         self.assertIn("Ne dis jamais", agent["persona"])
-        for attr, value in agent["attributes"].items():
+        for value in agent["attributes"].values():
             self.assertIn(value, agent["persona"])
+
+    def test_default_labels_are_applied(self):
+        with tempfile.TemporaryDirectory() as d:
+            labels = ROOT / "tools" / "agent_labels.fr.json"
+            build_agents.build(CONSTRAINTS, POPULATION, Path(d), seed=0, labels_path=labels)
+            agent = json.loads((Path(d) / "agents.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            self.assertIn("classe d'âge", agent["persona"])
+            self.assertIn("revenu mensuel du ménage", agent["persona"])
+            self.assertTrue((Path(d) / "labels.json").exists())
+
+    def test_names_match_declared_sex(self):
+        labels = json.loads((ROOT / "agents" / "labels.json").read_text(encoding="utf-8"))
+        committed = chat_agent.load_agents(ROOT / "agents" / "agents.jsonl")
+        female = set(build_agents.PRENOMS_F)
+        male = set(build_agents.PRENOMS_M)
+        for a in committed:
+            sex = labels.get("A1=" + a["attributes"]["A1"], "")
+            if sex == "femme":
+                self.assertIn(a["prenom"], female, a["prenom"])
+            elif sex == "homme":
+                self.assertIn(a["prenom"], male, a["prenom"])
 
     def test_csv_matches_jsonl(self):
         with (self.out / "agents.csv").open(encoding="utf-8") as f:

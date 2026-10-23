@@ -71,10 +71,11 @@ tools/
   chat_agent.py              # CLI de conversation (mock / OpenAI / Ollama)
   gui.py                     # serveur local + interface web (stdlib)
   bench_models.py            # latence, tokens/s, VRAM des modèles Ollama
-  agent_labels.example.json  # gabarit pour nommer A0..A11
+  agent_labels.fr.json       # libellés réels des 12 attributs
 agents/
   agents.csv                 # id, identity_key, prenom, nom, A0..A11
   agents.jsonl               # un agent par ligne + prompt système
+  labels.json                # copie des libellés utilisée par la GUI
   manifest.json              # contrôles (unicité, marges, seed)
 tests/
   test_agents.py             # pipeline, marges, unicité, prompt
@@ -88,11 +89,11 @@ docs/
 ```json
 {
   "id": 1,
-  "prenom": "Gabriel",
-  "nom": "Dumont",
-  "identity_key": "c783a2005753",
-  "attributes": {"A0": "v1", "...": "...", "prenom": "Gabriel", "nom": "Dumont"},
-  "persona": "Tu es Gabriel Dumont.\nTu participes à une discussion..."
+  "prenom": "Zoé",
+  "nom": "François",
+  "identity_key": "72da82b12be8",
+  "attributes": {"A0": "v1", "...": "...", "prenom": "Zoé", "nom": "François"},
+  "persona": "Tu es Zoé François.\nTu participes à une discussion..."
 }
 ```
 
@@ -108,7 +109,11 @@ modèles s'y accrochent et sortent du personnage.
 uv run python tools/gui.py                 # 127.0.0.1:8765
 uv run python tools/gui.py --open          # ouvre le navigateur
 uv run python tools/gui.py --port 9000 --agents agents/agents.jsonl
+uv run python tools/gui.py --port 0        # port libre choisi par l'OS
 ```
+
+Si le port demandé est occupé, le serveur essaie automatiquement les 10 suivants
+et affiche celui qu'il utilise.
 
 ![Aperçu](docs/gui.png)
 
@@ -187,25 +192,60 @@ latence médiane, les tokens/s et la VRAM sur une vraie persona du fichier
 `agents/agents.jsonl`.
 
 **Recommandation** : `llama3.2:1b` pour explorer la population, `llama3.2:3b`
-quand la qualité de la persona compte. `qwen3:0.6b` seulement pour tester le débit.
+quand la qualité de la persona compte. Pour des questions factuelles sur le profil
+(âge, revenu, logement), le 3B est nettement plus fidèle aux attributs ; le 0.6B
+répond souvent à côté. `qwen3:0.6b` seulement pour tester le débit.
 
 ---
 
-## 7. Nommer les attributs
+## 7. Attributs réels
 
-`A0..A11` n'ont pas de sémantique connue. Pour un prompt parlant, fournir un JSON :
+Les libellés d'origine de `A0..A11` **ne figurent pas dans le repo**. Pour rendre
+les conversations possibles, `tools/agent_labels.fr.json` propose une
+interprétation plausible et cohérente avec les distributions observées. Ce n'est
+pas une vérité : si tu connais la vraie sémantique, édite ce fichier et relance
+`build_agents.py`.
 
-```json
-{ "A0": "sexe", "A0=v1": "femme", "A0=v2": "homme" }
-```
+| Code | Attribut | Valeurs (effectifs) |
+|---|---|---|
+| A0 | diplôme le plus élevé | bac ou plus 461 · sans diplôme 28 · CAP/BEP 11 |
+| A1 | sexe | femme 254 · homme 244 · autre 2 |
+| A2 | lieu de résidence | grande ville 398 · commune rurale 94 · outre-mer 8 |
+| A3 | statut du logement | propriétaire 347 · locataire 142 · logé gratuitement 11 |
+| A4 | situation familiale | en couple 313 · célibataire 99 · divorcé/veuf 88 |
+| A5 | revenu mensuel du ménage | 1 500–2 500 € 278 · < 1 500 € 177 · > 2 500 € 45 |
+| A6 | nationalité | française 454 · autre UE 27 · hors UE 19 |
+| A7 | enfants à charge | oui 352 · non 134 · non renseigné 14 |
+| A8 | accès à Internet | oui 490 · non 10 · ne sait pas 0 |
+| A9 | classe d'âge | 18–39 ans 251 · 40–59 ans 141 · 60+ 108 |
+| A10 | équipement automobile | une voiture 448 · aucune 48 · deux ou plus 4 |
+| A11 | état de santé perçu | bon 261 · très bon 169 · limité 70 |
+
+Les libellés sont **appliqués par défaut** :
 
 ```bash
-uv run python tools/build_agents.py constraint_cells.csv population.csv \
-    --labels tools/agent_labels.example.json --seed 7
+uv run python tools/build_agents.py constraint_cells.csv population.csv
+# --no-labels pour revenir aux A0=v1 bruts
+# --labels mon_fichier.json pour une autre interprétation
 ```
 
-Les clés absentes restent affichées telles quelles (`A1=v0`). Sans labels, la
-conversation reste possible mais les attributs sont opaques.
+Ils servent à trois endroits :
+
+- le **prompt système** (`"classe d'âge : 40 à 59 ans"`), donc les réponses ;
+- la **GUI** (filtres, infobulles, tableau des marges) ;
+- `agents/labels.json`, pour que la GUI n'ait pas à deviner.
+
+Les prénoms sont aussi cohérents avec `A1` : Gabriel ne sera pas « femme ».
+Sans `--labels`, les prénoms sont tirés dans un pool mixte.
+
+Exemple de question réelle, avec `llama3.2:3b` :
+
+> **Q.** Quel âge as-tu, où vis-tu, et combien gagnes-tu par mois ?
+> **R.** J'ai 52 ans, je vis en grande ville, en France. Mes revenus mensuels sont
+> un peu en dessous de 1 200 €, ça peut varier d'un mois à l'autre.
+
+Le modèle s'appuie bien sur la classe d'âge et la tranche de revenu. `llama3.2:1b`
+reste plus vague sur les chiffres.
 
 ---
 
@@ -215,11 +255,12 @@ conversation reste possible mais les attributs sont opaques.
 uv run python -m unittest discover -s tests -v
 ```
 
-18 tests couvrent :
+20 tests couvrent :
 
 - l'exactitude des marges après enrichissement ;
 - l'unicité des identités et des vecteurs d'attributs ;
 - la complétude du prompt ;
+- l'application des libellés réels et la cohérence prénom/sexe ;
 - la sélection d'agent (id, clé, nom) ;
 - l'API de la GUI (liste, méta, chat, erreurs) ;
 - le CLI `--list` et le chat one-shot en mode mock.

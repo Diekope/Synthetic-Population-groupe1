@@ -68,6 +68,9 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(len(m["attrs"]), 12)
         self.assertTrue(m["duplicates"])
         self.assertIn("qwen2.5:0.5b", m["suggestions"])
+        self.assertEqual(m["labels"]["A1"], "sexe")
+        self.assertEqual(m["labels"]["A1=v2"], "femme")
+        self.assertIn("classe d'âge", m["labels"]["A9"])
 
     def test_chat_mock(self):
         agents = self._get("/api/agents")["agents"]

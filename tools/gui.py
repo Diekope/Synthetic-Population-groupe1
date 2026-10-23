@@ -5,6 +5,7 @@ Zéro dépendance (stdlib only). Sert une page HTML + une petite API JSON.
 
   uv run python tools/gui.py                     # http://127.0.0.1:8765
   uv run python tools/gui.py --open              # ouvre le navigateur
+  uv run python tools/gui.py --port 0            # port libre choisi par l'OS
   uv run python tools/gui.py --provider ollama --model llama3.2:3b
 
 L'interface permet de :
@@ -19,6 +20,7 @@ pas sur un réseau public.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import math
 import sys
@@ -68,6 +70,13 @@ class State:
             ({"key": "|".join(k), "count": c, "agent_id": reps[k],
               "attrs": dict(zip(self.attrs, k))} for k, c in self.counts.items() if c > 1),
             key=lambda d: -d["count"])
+        labels_path = agents_path.parent / "labels.json"
+        self.labels = {}
+        if labels_path.exists():
+            try:
+                self.labels = json.loads(labels_path.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
 
     def meta(self) -> dict:
         return {
@@ -84,6 +93,7 @@ class State:
             "distributions": self.distributions,
             "duplicates": self.duplicates,
             "suggestions": MODEL_SUGGESTIONS,
+            "labels": self.labels,
         }
 
     def agent_list(self) -> dict:
@@ -247,8 +257,10 @@ INDEX = r"""<!doctype html>
   .tip{position:fixed;pointer-events:none;background:#111827;color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;opacity:0;transition:opacity .08s;z-index:50;white-space:nowrap}
   table.heat{border-collapse:separate;border-spacing:4px;width:100%;font-size:12px}
   table.heat th{font-weight:600;color:var(--muted);text-align:left;padding:2px 6px;font-size:11px}
-  table.heat td{border-radius:7px;padding:8px 6px;text-align:center;background:#f1ece2;position:relative}
-  table.heat td span{position:relative;z-index:1}
+  table.heat td{border-radius:7px;padding:7px 5px;text-align:center;background:#f1ece2;position:relative;vertical-align:middle}
+  table.heat td .n{display:block;font-weight:700;font-size:13px}
+  table.heat td .vl{display:block;font-size:9px;line-height:1.15;color:#6b7280;margin-top:2px;max-width:104px}
+  table.heat th:first-child{width:118px}
   .duprow{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:7px;cursor:pointer;background:#fff}
   .duprow:hover{border-color:#e3b7a2}
   .duprow .n{font-weight:800;font-size:18px;color:var(--accent);min-width:38px;text-align:right}
@@ -367,6 +379,9 @@ function model(){ return $("#model").value.trim(); }
 
 function pct(x){ return (100*x).toFixed(1) + " %"; }
 function fmt(x, d=2){ return Number(x).toFixed(d).replace(".", ","); }
+function AL(a){ return (S.meta && S.meta.labels && S.meta.labels[a]) || a; }
+function VL(a, v){ return (S.meta && S.meta.labels && S.meta.labels[a + "=" + v]) || v; }
+function attrName(a){ const l = AL(a); return l === a ? a : a + " — " + l; }
 
 async function boot(){
   const [meta, data] = await Promise.all([
@@ -399,14 +414,14 @@ function renderStats(){
 
 function renderFilters(){
   const sel = $("#fattr");
-  for (const a of S.meta.attrs) sel.append(new Option(a, a));
+  for (const a of S.meta.attrs) sel.append(new Option(attrName(a), a));
   sel.onchange = () => {
     S.filter.attr = sel.value; S.filter.val = "";
     const vs = $("#fval"); vs.innerHTML = "";
     vs.append(new Option("—", ""));
     if (sel.value) for (const v of S.meta.domains[sel.value]) {
       const n = S.meta.distributions[sel.value][v] || 0;
-      vs.append(new Option(`${v} (${n})`, v));
+      vs.append(new Option(`${VL(sel.value, v)} (${n})`, v));
     }
     renderList();
   };
@@ -417,7 +432,7 @@ function renderFilters(){
 function renderAttrSelects(){
   const xs = $("#xa"), ys = $("#ya");
   S.meta.attrs.forEach((a, i) => {
-    xs.append(new Option(a, a)); ys.append(new Option(a, a));
+    xs.append(new Option(attrName(a), a)); ys.append(new Option(attrName(a), a));
   });
   xs.value = S.meta.attrs[0]; ys.value = S.meta.attrs[1] || S.meta.attrs[0];
   xs.onchange = ys.onchange = () => renderScatter();
@@ -445,7 +460,7 @@ function renderList(){
     d.append(el("div", "av", init));
     const who = el("div", "who");
     who.append(el("div", "nm", a.name));
-    who.append(el("div", "sub", "#" + a.id + " · " + a.identity_key + " · " + Object.entries(a.attributes).slice(0, 3).map(([k,v]) => k + "=" + v).join(" ")));
+    who.append(el("div", "sub", "#" + a.id + " · " + Object.entries(a.attributes).slice(0, 3).map(([k, v]) => VL(k, v)).join(" · ")));
     d.append(who);
     const b = el("span", "badge" + (a.mult > 1 ? " hot" : ""), a.mult > 1 ? "×" + a.mult : "1");
     d.append(b);
@@ -468,7 +483,10 @@ function selectAgent(id){
   box.append(el("div", "sub", "#" + a.id + " · " + a.identity_key + (a.mult > 1 ? " · persona ×" + a.mult : " · persona unique")));
   head.append(av, box);
   const at = $("#cattrs"); at.innerHTML = ""; at.style.display = "flex";
-  for (const [k,v] of Object.entries(a.attributes)) at.append(el("span", null, k + "=" + v));
+  for (const [k, v] of Object.entries(a.attributes)) {
+    if (k === "prenom" || k === "nom") continue;
+    at.append(el("span", null, AL(k) + " : " + VL(k, v)));
+  }
   $("#input").disabled = false; $("#send").disabled = false;
   $("#lat").textContent = "";
   const empty = el("div", "empty", "À toi de jouer. Exemple : « Présente-toi en deux phrases. »");
@@ -520,23 +538,28 @@ function renderHeat(){
   const head = el("tr");
   head.append(el("th", null, "attribut"));
   for (const v of S.meta.domains[S.meta.attrs[0]]) head.append(el("th", null, v));
-  head.append(el("th", null, "max"));
+  head.append(el("th", null, "valeur dominante"));
   t.append(head);
   let max = 1;
   for (const a of S.meta.attrs) for (const n of Object.values(S.meta.distributions[a])) max = Math.max(max, n);
   for (const a of S.meta.attrs){
-    const tr = el("tr"); tr.append(el("th", null, a));
+    const tr = el("tr"); tr.append(el("th", null, attrName(a)));
     let best = 0, bestV = "";
     for (const v of S.meta.domains[a]){
       const n = S.meta.distributions[a][v] || 0;
       if (n > best){ best = n; bestV = v; }
       const td = el("td");
       td.style.background = `rgba(194,65,12,${0.06 + 0.5 * n / max})`;
-      td.title = `${a}=${v} : ${n} agents (${pct(n/500)})`;
-      td.append(el("span", null, n));
+      td.title = `${AL(a)} : ${VL(a, v)} — ${n} agents (${pct(n/500)})`;
+      td.append(el("span", "n", n));
+      td.append(el("span", "vl", VL(a, v)));
       tr.append(td);
     }
-    tr.append(el("td", null, bestV + " · " + pct(best/500)));
+    const tdMax = el("td");
+    tdMax.style.background = "#efe9dd";
+    tdMax.append(el("span", "n", pct(best / 500)));
+    tdMax.append(el("span", "vl", VL(a, bestV)));
+    tr.append(tdMax);
     t.append(tr);
   }
 }
@@ -550,7 +573,7 @@ function renderDups(){
     row.append(el("div", "n", "×" + d.count));
     const mid = el("div"); mid.style.flex = "1";
     mid.append(el("div", null, a.name + "  #" + a.id));
-    mid.append(el("div", "a", Object.entries(d.attrs).map(([k,v]) => k + "=" + v).join(" · ")));
+    mid.append(el("div", "a", Object.entries(d.attrs).map(([k, v]) => AL(k) + " : " + VL(k, v)).join(" · ")));
     row.append(mid);
     row.onclick = () => selectAgent(d.agent_id);
     box.append(row);
@@ -695,8 +718,28 @@ def main() -> int:
               "Lance d'abord : uv run python tools/build_agents.py constraint_cells.csv population.csv",
               file=sys.stderr)
         return 1
-    httpd = create_server(args.agents, args.host, args.port)
-    url = f"http://{args.host}:{args.port}/"
+    httpd = None
+    chosen = args.port
+    if args.port == 0:                       # port libre choisi par l'OS
+        httpd = create_server(args.agents, args.host, 0)
+        chosen = httpd.server_address[1]
+    else:                                    # port occupé : on essaie les 10 suivants
+        for p in range(args.port, args.port + 10):
+            try:
+                httpd = create_server(args.agents, args.host, p)
+                chosen = p
+                break
+            except OSError as e:
+                if e.errno != errno.EADDRINUSE:
+                    print(f"Impossible d'ouvrir le port : {e}", file=sys.stderr)
+                    return 1
+        if httpd is None:
+            print(f"Ports {args.port} à {args.port + 9} occupés. "
+                  f"Choisis-en un autre : --port 8888", file=sys.stderr)
+            return 1
+        if chosen != args.port:
+            print(f"Port {args.port} occupé (autre processus), j'utilise {chosen}.")
+    url = f"http://{args.host}:{chosen}/"
     print(f"GUI : {url}  ({len(httpd.state.agents)} agents, Ctrl+C pour arrêter)")
     if args.open:
         webbrowser.open(url)

@@ -24,5 +24,5 @@
     "A10",
     "A11"
   ],
-  "labels_file": null
+  "labels_file": "tools/agent_labels.fr.json"
 }

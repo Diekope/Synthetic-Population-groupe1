@@ -1,6 +1,0 @@
-{
-  "_comment": "Gabarit : remplace les clés par tes vrais libellés. Exemple : \"A0\": \"sexe\", \"A0=v1\": \"femme\". Les clés absentes restent affichées telles quelles (A0=v1).",
-  "A0": "attribut A0",
-  "A0=v0": "première valeur de A0",
-  "A0=v1": "deuxième valeur de A0"
-}
