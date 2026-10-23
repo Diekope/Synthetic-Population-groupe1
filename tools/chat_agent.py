@@ -14,7 +14,7 @@ Exemples :
   uv run python tools/chat_agent.py --agent 42 --message "Tu travailles dans quoi ?"
   uv run python tools/chat_agent.py --agent 42                  # REPL
   OPENAI_API_KEY=... uv run python tools/chat_agent.py --agent 42 --provider openai
-  uv run python tools/chat_agent.py --agent 42 --provider ollama --model llama3.1
+  uv run python tools/chat_agent.py --agent 42 --provider ollama --model llama3.2:1b
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ def main() -> int:
     agent = select_agent(agents, args.agent)
     model = args.model or os.environ.get("OPENAI_MODEL") or os.environ.get("OLLAMA_MODEL")
     if not model:
-        model = {"openai": "gpt-4o-mini", "ollama": "llama3.1"}.get(args.provider, "mock")
+        model = {"openai": "gpt-4o-mini", "ollama": "llama3.2:1b"}.get(args.provider, "mock")
 
     if args.message:
         history = [{"role": "user", "content": args.message}]

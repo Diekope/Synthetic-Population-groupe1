@@ -41,6 +41,8 @@ MODEL_SUGGESTIONS = [
     "qwen2.5:1.5b",
     "llama3.2:1b",
     "llama3.2:3b",
+    "huihui_ai/qwen3-abliterated:4b",
+    "huihui_ai/llama3.2-abliterate:3b",
     "gemma3:1b",
     "phi3:mini",
 ]

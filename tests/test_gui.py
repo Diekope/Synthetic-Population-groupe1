@@ -96,6 +96,7 @@ class GuiTest(unittest.TestCase):
     def test_models(self):
         data = self._get("/api/models")
         self.assertIn("suggestions", data)
+        self.assertIn("huihui_ai/qwen3-abliterated:4b", data["suggestions"])
         self.assertIsInstance(data["ollama"], list)
 
 

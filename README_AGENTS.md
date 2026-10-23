@@ -176,6 +176,9 @@ Mesures sur cette machine (Apple M2, **8 Go**, 2 runs, 100 tokens) :
 | `qwen3:0.6b` | 0,5 Go | 0,6–0,8 s | 117–135 | 1,0 Go | très rapide, casse souvent le personnage |
 | **`llama3.2:1b`** | **1,3 Go** | **1,1–1,3 s** | **58–61** | **1,5 Go** | **défaut recommandé** |
 | `llama3.2:3b` | 2,0 Go | 2,8 s | 37 | 2,6 Go | meilleure qualité, encore confortable |
+| `qwen3-abliterated:4b` | 2,5 Go | 2,9 s | 28 | 3,2 Go | sans filtres, bon compromis |
+| `llama3.2-abliterate:3b` | 2,2 Go | 2,9 s | 38 | 2,6 Go | sans filtres, plus rapide |
+| `dolphin3:8b` | 4,9 Go | 154 s | 0,8 | 4,6 Go | swap sur 8 Go, à éviter |
 | `qwen2.5:1.5b` | ~1,0 Go | — | — | ~1,2 Go | alternative au 1b |
 | `gemma3:1b` | ~0,8 Go | — | — | ~1,0 Go | alternative compacte |
 | `llama3.1:8b` | 4,9 Go | — | — | ~5,5 Go | trop juste avec navigateur + OS sur 8 Go |
@@ -194,7 +197,29 @@ latence médiane, les tokens/s et la VRAM sur une vraie persona du fichier
 **Recommandation** : `llama3.2:1b` pour explorer la population, `llama3.2:3b`
 quand la qualité de la persona compte. Pour des questions factuelles sur le profil
 (âge, revenu, logement), le 3B est nettement plus fidèle aux attributs ; le 0.6B
-répond souvent à côté. `qwen3:0.6b` seulement pour tester le débit.
+répond souvent à côté.
+
+### Questions sans filtres
+
+Les modèles « abliterated » réduisent fortement les refus sans changer la persona.
+Mesuré sur cette machine :
+
+| Modèle | Taille | Latence | tok/s | VRAM | Verdict |
+|---|---|---|---|---|---|
+| **`huihui_ai/qwen3-abliterated:4b`** | 2,5 Go | 2,9 s | 28 | 3,2 Go | **choix recommandé** : français correct, reste dans le personnage |
+| `huihui_ai/llama3.2-abliterate:3b` | 2,2 Go | 2,9 s | 38 | 2,6 Go | plus rapide, mais français approximatif et tendance à théâtraliser |
+| `dolphin3:8b` | 4,9 Go | 154 s | 0,8 | 4,6 Go | swappe sur 8 Go, inutilisable ici |
+
+```bash
+ollama pull huihui_ai/qwen3-abliterated:4b
+uv run python tools/chat_agent.py --agent 3 --provider ollama \
+    --model huihui_ai/qwen3-abliterated:4b
+```
+
+Testé sans refus sur des questions de vote, de religion, de cannabis et
+d'immigration. Un modèle sans filtres n'est pas sans biais : il peut produire des
+stéréotypes, des erreurs factuelles, et sortir du personnage. Valider un
+échantillon avant d'exploiter les réponses.
 
 ---
 
