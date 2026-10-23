@@ -63,7 +63,8 @@ class AgentPipelineTest(unittest.TestCase):
         agent = self.agents[0]
         self.assertIn(agent["prenom"], agent["persona"])
         self.assertIn(agent["nom"], agent["persona"])
-        self.assertIn(agent["identity_key"], agent["persona"])
+        self.assertNotIn("Identité stable", agent["persona"])
+        self.assertIn("Ne dis jamais", agent["persona"])
         for attr, value in agent["attributes"].items():
             self.assertIn(value, agent["persona"])
 

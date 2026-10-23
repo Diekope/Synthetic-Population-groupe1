@@ -28,6 +28,11 @@ import urllib.request
 from pathlib import Path
 
 QUIT = {"/quit", "/exit", "/q"}
+
+
+class LLMError(RuntimeError):
+    """Erreur de fournisseur, remontée proprement à la CLI ou à la GUI."""
+
 HELP = """Commandes :
   /who              affiche l'agent courant
   /attrs            affiche ses attributs
@@ -72,7 +77,7 @@ def build_messages(agent: dict, history: list[dict]) -> list[dict]:
 def call_openai(messages: list[dict], model: str) -> str:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
-        raise SystemExit("OPENAI_API_KEY manquante.")
+        raise LLMError("OPENAI_API_KEY manquante.")
     base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     body = json.dumps({"model": model, "messages": messages, "temperature": 0.8}).encode()
     req = urllib.request.Request(
@@ -82,22 +87,30 @@ def call_openai(messages: list[dict], model: str) -> str:
         with urllib.request.urlopen(req, timeout=120) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
-        raise SystemExit(f"API OpenAI : HTTP {e.code} — {e.read().decode(errors='replace')[:500]}")
+        raise LLMError(f"API OpenAI : HTTP {e.code} — {e.read().decode(errors='replace')[:500]}")
     except urllib.error.URLError as e:
-        raise SystemExit(f"API OpenAI injoignable : {e.reason}")
+        raise LLMError(f"API OpenAI injoignable : {e.reason}")
     return data["choices"][0]["message"]["content"].strip()
 
 
 def call_ollama(messages: list[dict], model: str) -> str:
     base = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
+    payload = {"model": model, "messages": messages, "stream": False}
+    # Les modèles « reasoning » (qwen3, deepseek-r1…) brûlent le budget en réflexion
+    # avant de répondre. On la coupe par défaut ; OLLAMA_THINK=1 pour la réactiver.
+    think = os.environ.get("OLLAMA_THINK", "").lower()
+    if think:
+        payload["think"] = think not in ("0", "false", "off", "no")
+    elif any(tag in model.lower() for tag in ("qwen3", "deepseek-r1", "qwq", "reason")):
+        payload["think"] = False
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(base + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=300) as r:
             data = json.load(r)
     except urllib.error.URLError as e:
-        raise SystemExit(f"Ollama injoignable ({base}) : {e.reason}. Lance `ollama serve`.")
+        raise LLMError(f"Ollama injoignable ({base}) : {e.reason}. Lance `ollama serve`.")
     return data["message"]["content"].strip()
 
 
@@ -117,7 +130,7 @@ def respond(agent: dict, history: list[dict], provider: str, model: str) -> str:
         return call_openai(messages, model)
     if provider == "ollama":
         return call_ollama(messages, model)
-    raise SystemExit(f"Fournisseur inconnu : {provider}")
+    raise LLMError(f"Fournisseur inconnu : {provider}")
 
 
 def repl(agent: dict, agents: list[dict], provider: str, model: str, max_turns: int) -> None:
@@ -153,7 +166,12 @@ def repl(agent: dict, agents: list[dict], provider: str, model: str, max_turns: 
             print(describe(agent))
             continue
         history.append({"role": "user", "content": line})
-        answer = respond(agent, history, provider, model)
+        try:
+            answer = respond(agent, history, provider, model)
+        except LLMError as e:
+            history.pop()
+            print(f"erreur : {e}\n")
+            continue
         history.append({"role": "assistant", "content": answer})
         if max_turns and len(history) > 2 * max_turns:
             del history[: len(history) - 2 * max_turns]
@@ -189,7 +207,11 @@ def main() -> int:
 
     if args.message:
         history = [{"role": "user", "content": args.message}]
-        print(respond(agent, history, args.provider, model))
+        try:
+            print(respond(agent, history, args.provider, model))
+        except LLMError as e:
+            print(f"erreur : {e}", file=sys.stderr)
+            return 2
         return 0
 
     repl(agent, agents, args.provider, model, args.max_turns)

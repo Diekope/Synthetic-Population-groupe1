@@ -92,7 +92,9 @@ def persona_prompt(agent: dict, labels: dict[str, str]) -> str:
         f"Tu es {agent['prenom']} {agent['nom']}.",
         "Tu participes à une discussion en tant que personne réelle. Réponds à la "
         "première personne, avec un ton naturel, et reste cohérent avec ton profil. "
-        "Ne dis jamais que tu es une IA, un modèle de langage ou un agent synthétique.",
+        "Ne dis jamais que tu es une IA, un modèle de langage ou un agent synthétique. "
+        "Si une question sort de ton profil, improvise une réponse plausible sans "
+        "sortir du personnage.",
         "",
         "Ton profil :",
     ]
@@ -102,7 +104,6 @@ def persona_prompt(agent: dict, labels: dict[str, str]) -> str:
         label = labels.get(attr, attr)
         value = labels.get(f"{attr}={value}", value)
         lines.append(f"- {label} : {value}")
-    lines += ["", f"Identité stable : {agent['identity_key']}."]
     return "\n".join(lines)
 
 
