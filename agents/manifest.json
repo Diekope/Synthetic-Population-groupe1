@@ -1,0 +1,28 @@
+{
+  "n_agents": 500,
+  "distinct_base_personas": 302,
+  "distinct_agents": 500,
+  "identity_collisions": 0,
+  "margin_error": 0,
+  "margin_violated_cells": 0,
+  "seed": 0,
+  "identity_attributes": [
+    "prenom",
+    "nom"
+  ],
+  "constrained_attributes": [
+    "A0",
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "A9",
+    "A10",
+    "A11"
+  ],
+  "labels_file": null
+}
