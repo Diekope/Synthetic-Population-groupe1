@@ -81,8 +81,72 @@ uv run python tools/survey.py surveys/demo.fr.json --provider mock --limit 8 --s
 uv run python -m unittest discover -s tests -v
 ```
 
-Prérequis : Python 3.12 via `uv`. Aucune dépendance Python pour la GUI et la CLI.
-Ollama est optionnel ; sans lui, le fournisseur `mock` permet de tester le câblage.
+### Vue d'ensemble
+
+```
+constraint_cells.csv ─┐
+population.csv ───────┴─► build_agents.py ─► agents/
+                                             ├─ agents.csv / agents.jsonl   (500 agents)
+                                             ├─ labels.json                 (libellés pour la GUI)
+                                             └─ manifest.json               (contrôles + provenance)
+                                                    │
+                    ┌───────────────────────────────┼───────────────────────────────┐
+                    ▼                               ▼                               ▼
+              gui.py --open                  chat_agent.py                    survey.py
+        (voir, filtrer, atlas, chat,      (conversation CLI, REPL,      (questionnaire -> agrégats,
+         onglet Sonder)                    flux en direct)               tableaux croisés)
+                    └───────────────────────────────┬───────────────────────────────┘
+                                                    ▼
+                            eval_fidelity.py  (mesure le respect des profils)
+                                                    │
+                                                    ▼
+                     fournisseur : mock (hors ligne) | openai | ollama
+```
+
+En clair : le générateur Java (repo principal) produit une population exacte ;
+`build_agents.py` en fait des agents identifiables ; les quatre outils Python
+(GUI, CLI, sonde, fidélité) les exploitent via un fournisseur de modèle.
+
+### Prérequis et environnements
+
+Aucune dépendance Python n'est nécessaire pour `build_agents.py`, `gui.py`,
+`chat_agent.py`, `survey.py` et `eval_fidelity.py` : **bibliothèque standard
+uniquement**. Python **3.12** est recommandé (c'est ce que `pyproject.toml`
+exige) ; le code n'utilisant que la stdlib, il tourne aussi sur des versions plus
+anciennes. Les dépendances (ortools, pandas, numpy, playwright) ne concernent que
+les outils de référence et les tests navigateur.
+
+**uv (recommandé)**
+
+```bash
+uv run python tools/gui.py --open        # uv lit pyproject.toml, crée .venv tout seul
+```
+
+**Python + venv + pip (sans uv)**
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate            # Windows PowerShell : .venv\Scripts\Activate.ps1
+python tools/gui.py --open           # rien à installer (stdlib)
+# optionnel : pip install ortools pandas numpy    (tools/reference_*.py)
+```
+
+**conda / mamba**
+
+```bash
+conda create -n synthpop python=3.12 -y
+conda activate synthpop
+python tools/gui.py --open           # rien à installer (stdlib)
+# optionnel : conda install -c conda-forge ortools pandas numpy
+```
+
+Lance les commandes **depuis la racine du dépôt** (les chemins `agents/`,
+`surveys/`, `constraint_cells.csv` sont relatifs). Sinon, indique-les
+explicitement : `--agents chemin/agents.jsonl`, `--surveys chemin/surveys`, et
+donne le chemin des CSV à `build_agents.py`.
+
+Ollama est optionnel ; sans lui, le fournisseur `mock` permet de tester le
+câblage (il ne « réfléchit » pas, il valide le pipeline).
 
 ---
 
@@ -481,14 +545,37 @@ uv run python -m unittest discover -s tests -v
 
 ---
 
-## 10. Limites
+## 10. Ce que l'on peut faire (et ce que l'on ne peut pas)
 
-- `prenom`/`nom` sont des métadonnées d'identité, pas des variables contraintes :
-  ne pas les traiter comme un signal démographique.
-- Les personas restent synthétiques : ce sont des agents de test, pas des personnes.
-- Même à 3B, un petit modèle peut casser le personnage sur des questions très
-  personnelles ou sensibles. Valider un échantillon avant une étude sérieuse.
-- La GUI n'a pas d'authentification et détient l'accès au fournisseur LLM.
+### On peut
+
+- construire **500 agents identifiables** dont les 12 attributs respectent
+  **exactement** les 45 tables de marges (erreur L1 = 0) ;
+- explorer la population (liste, filtres, atlas, distributions, copies exactes) ;
+- **discuter** avec un agent (CLI ou GUI), conversation isolée par agent ;
+- **sonder** tout ou partie de la population et agréger (choix, croisements) ;
+- **mesurer** la fidélité d'un modèle au profil, et comparer des modèles ;
+- choisir le fournisseur : `mock` (hors ligne), `openai`, `ollama` ;
+- reproduire à l'identique (seed + entrées) et **vérifier** avec `--check`.
+
+### On ne peut pas
+
+- rendre les 500 agents **démographiquement distincts** : il n'existe que
+  **302 profils** sur les 12 attributs ; 198 lignes sont des copies exactes qui
+  répondront de façon identique (utiliser « un par profil » pour sonder).
+- garantir la **fidélité** d'un petit modèle : elle se mesure, elle ne se suppose
+  pas (voir §7).
+- connaître la **vraie sémantique** de `A0..A11` : les libellés sont une
+  interprétation plausible, pas une vérité ; la sonde et l'évaluation de fidélité
+  en dépendent.
+- obtenir un **échantillon statistique** d'une population réelle : la population
+  est synthétique, ses marges viennent des tables fournies.
+- empêcher un modèle de produire des **stéréotypes** ou des erreurs factuelles,
+  ni de sortir du personnage sur des sujets sensibles (surtout les modèles
+  « abliterated »).
+- **exposer la GUI** sur un réseau : pas d'authentification, elle détient l'accès
+  au fournisseur LLM. Elle écoute sur `127.0.0.1` par défaut.
+- modifier le **générateur Java** ou les marges depuis cette couche : hors périmètre.
 
 ---
 
@@ -496,7 +583,8 @@ uv run python -m unittest discover -s tests -v
 
 - `README.md` (repo principal) : problème des marges, algorithme greedy,
   dé-clonage, résultats et optimum CP-SAT.
-- Branche `feature/agents`, worktree `Synthetic-Population-agents`.
+- Branche `feature/agents-toolkit` (worktree `Synthetic-Population-agents`) :
+  cette couche agents. Elle part de `feature/agents`.
 
 ---
 
