@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+.venv/
+surveys/*.answers.jsonl
+surveys/*.report.json
+out/*.jsonl
+out/*.report.json

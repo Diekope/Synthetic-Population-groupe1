@@ -1,0 +1,12 @@
+[project]
+name = "synthetic-population-agents"
+version = "0.1.0"
+description = "Population synthétique exacte (marges) + couche agents : identités, GUI, sondage, fidélité."
+readme = "README_AGENTS.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# Rien n'est requis pour la GUI, la CLI, la sonde et l'évaluation (stdlib seule).
+# Ces paquets ne servent qu'aux outils de référence et aux tests d'intégration.
+dev = ["playwright>=1.40"]

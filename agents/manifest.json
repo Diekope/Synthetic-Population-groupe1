@@ -1,7 +1,13 @@
 {
+  "tool": "build_agents",
+  "tool_version": "2",
   "n_agents": 500,
   "distinct_base_personas": 302,
+  "distinct_profiles": 302,
   "distinct_agents": 500,
+  "duplicated_agents": 227,
+  "exact_copies": 198,
+  "max_copies": 48,
   "identity_collisions": 0,
   "margin_error": 0,
   "margin_violated_cells": 0,
@@ -10,6 +16,21 @@
     "prenom",
     "nom"
   ],
+  "profile_attributes": [
+    "A0",
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "A9",
+    "A10",
+    "A11"
+  ],
+  "cluster_field": "cluster_id",
   "constrained_attributes": [
     "A0",
     "A1",
@@ -24,5 +45,11 @@
     "A10",
     "A11"
   ],
-  "labels_file": "tools/agent_labels.fr.json"
+  "labels_file": "tools/agent_labels.fr.json",
+  "inputs": {
+    "constraints_sha256": "f4561ec7bc78a2b60a658935f62e5bc7377f59b0a3defa7a66dd28fb083a2662",
+    "population_sha256": "c844a53f59d20835278a3714632eed2c92607e25f7ce1ca1306bb128d692d224",
+    "labels_sha256": "442726e3a4d3718ae2a3abe99295d97d729ce2a83417f6b1c1f68bff05ff01ed"
+  },
+  "git_commit": "7acdfbe1d468f2545d4e4834ecf81ecddf52be22"
 }

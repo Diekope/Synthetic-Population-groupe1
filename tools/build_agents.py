@@ -12,10 +12,15 @@ publique est un hash déterministe de TOUS les attributs (contraints + identité
 donc elle est bien dérivée des attributs, pas d'un compteur arbitraire.
 
 Sorties (dans --out, défaut `agents/`) :
-  agents.csv    : id, identity_key, prenom, nom, A0..A11
+  agents.csv    : id, identity_key, cluster_id, copy_index, copies, prenom, nom, A0..A11
   agents.jsonl  : un agent par ligne, avec son prompt système prêt pour un LLM
   labels.json   : libellés lisibles, consommés par la GUI
   manifest.json : contrôles (marges, unicité, seed, labels)
+
+Les copies exactes sont CONSERVÉES : deux agents qui partagent les mêmes 12
+attributs contraints restent deux lignes, avec la même `cluster_id`. Les champs
+`copy_index` (1..N) et `copies` (N) rendent la duplication visible au lieu de la
+masquer derrière des prénoms différents.
 
 Les libellés de `tools/agent_labels.fr.json` sont appliqués par défaut. Ils
 rendent le prompt parlant (`"classe d'âge : 40 à 59 ans"`) et les prénoms
@@ -34,9 +39,17 @@ import hashlib
 import json
 import random
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import uuid
 from collections import Counter
 from pathlib import Path
+
+TOOL = "build_agents"
+TOOL_VERSION = "2"
+ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "synthetic-population/agents")
 
 PRENOMS_F = [
     "Léa", "Inès", "Chloé", "Manon", "Sarah", "Alice", "Louise", "Jade",
@@ -96,15 +109,34 @@ def identity_key(values: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+def file_sha256(path: Path | None) -> str | None:
+    if path is None or not path.exists():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def git_commit() -> str | None:
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"],
+                             cwd=Path(__file__).resolve().parent.parent,
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def persona_prompt(agent: dict, labels: dict[str, str]) -> str:
     """Prompt système : une personne, pas un modèle. Les labels sont optionnels."""
     lines = [
-        f"Tu es {agent['prenom']} {agent['nom']}.",
-        "Tu participes à une discussion en tant que personne réelle. Réponds à la "
-        "première personne, avec un ton naturel, et reste cohérent avec ton profil. "
-        "Ne dis jamais que tu es une IA, un modèle de langage ou un agent synthétique. "
-        "Si une question sort de ton profil, improvise une réponse plausible sans "
-        "sortir du personnage.",
+        f"Tu es {agent['prenom']} {agent['nom']}, une personne réelle. Tu réponds "
+        "toujours en français, à la première personne, avec un ton naturel.",
+        "Tu dois rester strictement cohérent avec le profil ci-dessous. Si une "
+        "question porte sur une information présente dans ton profil (âge, sexe, "
+        "logement, revenu, diplôme, nationalité, enfants, santé, équipement…), tu "
+        "réponds avec EXACTEMENT la valeur de ton profil, sans l'inventer ni la "
+        "contredire. Tu ne dis jamais que tu es une IA, un modèle de langage ou un "
+        "agent synthétique. Pour une question hors profil, tu improvises une réponse "
+        "plausible qui ne contredit pas ton profil.",
         "",
         "Ton profil :",
     ]
@@ -190,16 +222,34 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
             labels_ref = str(labels_path)
     names = assign_names(rows, labels, rng)
 
+    # Profil = les 12 attributs contraints. Plusieurs agents peuvent partager
+    # exactement le même profil : on le rend explicite via cluster_id/copy_index.
+    bases: dict[tuple[str, ...], list[int]] = {}
+    for i, row in enumerate(rows):
+        bases.setdefault(tuple(row[a] for a in attrs), []).append(i)
+    cluster_ids = {
+        base: "p" + hashlib.sha256(
+            "|".join(f"{a}={v}" for a, v in zip(attrs, base)).encode("utf-8")
+        ).hexdigest()[:7]
+        for base in bases
+    }
+    copy_index = {i: k for base, idxs in bases.items() for k, i in enumerate(idxs, start=1)}
+
     agents = []
     for i, (row, (prenom, nom)) in enumerate(zip(rows, names), start=1):
         values = {a: row[a] for a in attrs}
         values["prenom"] = prenom
         values["nom"] = nom
+        base = tuple(row[a] for a in attrs)
         agent = {
             "id": i,
+            "stable_id": str(uuid.uuid5(ID_NAMESPACE, identity_key(values))),
             "prenom": prenom,
             "nom": nom,
             "identity_key": identity_key(values),
+            "cluster_id": cluster_ids[base],
+            "copy_index": copy_index[i - 1],
+            "copies": len(bases[base]),
             "attributes": values,
         }
         agent["persona"] = persona_prompt(agent, labels)
@@ -215,12 +265,15 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
         )
 
     out.mkdir(parents=True, exist_ok=True)
-    columns = ["id", "identity_key", "prenom", "nom", *attrs]
+    columns = ["id", "stable_id", "identity_key", "cluster_id", "copy_index", "copies",
+               "prenom", "nom", *attrs]
+    meta_cols = ("id", "stable_id", "identity_key", "cluster_id", "copy_index", "copies",
+                 "prenom", "nom")
     with (out / "agents.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=columns)
         w.writeheader()
         for a in agents:
-            w.writerow({**{c: a[c] for c in ("id", "identity_key", "prenom", "nom")},
+            w.writerow({**{c: a[c] for c in meta_cols},
                         **{x: a["attributes"][x] for x in attrs}})
 
     with (out / "agents.jsonl").open("w", encoding="utf-8") as f:
@@ -230,16 +283,30 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
     after_error, after_violated = margin_error(
         [a["attributes"] for a in agents], tables)
     manifest = {
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
         "n_agents": len(agents),
-        "distinct_base_personas": len({tuple(r[a] for a in attrs) for r in rows}),
+        "distinct_base_personas": len(bases),
+        "distinct_profiles": len(bases),
         "distinct_agents": len(vectors),
+        "duplicated_agents": sum(len(v) for v in bases.values() if len(v) > 1),
+        "exact_copies": len(agents) - len(bases),
+        "max_copies": max(len(v) for v in bases.values()),
         "identity_collisions": len(agents) - len(keys),
         "margin_error": after_error,
         "margin_violated_cells": after_violated,
         "seed": seed,
         "identity_attributes": ["prenom", "nom"],
+        "profile_attributes": attrs,
+        "cluster_field": "cluster_id",
         "constrained_attributes": attrs,
         "labels_file": labels_ref,
+        "inputs": {
+            "constraints_sha256": file_sha256(constraints),
+            "population_sha256": file_sha256(population_csv),
+            "labels_sha256": file_sha256(labels_path),
+        },
+        "git_commit": git_commit(),
     }
     (out / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -254,6 +321,50 @@ def build(constraints: Path, population_csv: Path, out: Path, seed: int,
     return manifest
 
 
+def check(constraints: Path, population_csv: Path, out: Path, seed: int,
+          labels_path: Path | None) -> int:
+    """Vérifie que `out` correspond exactement aux entrées actuelles.
+
+    Reconstruit dans un dossier temporaire et compare octet à octet ; n'écrit rien.
+    """
+    if not out.exists():
+        print(f"Dossier absent : {out}", file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh = Path(tmp)
+        manifest = build(constraints, population_csv, fresh, seed, labels_path)
+        ok = True
+        for name in ("agents.csv", "agents.jsonl", "labels.json"):
+            a, b = fresh / name, out / name
+            if not b.exists() and not a.exists():
+                continue
+            if not (a.exists() and b.exists()):
+                print(f"  {name}: présence différente", file=sys.stderr)
+                ok = False
+            elif a.read_bytes() != b.read_bytes():
+                print(f"  {name}: contenu différent", file=sys.stderr)
+                ok = False
+        committed = out / "manifest.json"
+        if committed.exists():
+            want = json.loads(committed.read_text(encoding="utf-8"))
+            # git_commit est informatif (le commit courant change après coup) :
+            # on l'ignore dans la comparaison.
+            want.pop("git_commit", None)
+            fresh_manifest = dict(manifest)
+            fresh_manifest.pop("git_commit", None)
+            if want != fresh_manifest:
+                print("  manifest.json: différent", file=sys.stderr)
+                ok = False
+        else:
+            print("  manifest.json: absent", file=sys.stderr)
+            ok = False
+    if ok:
+        print(f"{out} est à jour (entrées inchangées, seed {seed}).")
+        return 0
+    print("Vérification échouée : relance build_agents.py.", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -266,17 +377,23 @@ def main() -> int:
                    help="JSON {attribut: label, 'A0=v1': label_valeur} "
                         f"(défaut : {default_labels.name})")
     p.add_argument("--no-labels", action="store_true", help="attributs affichés bruts (A0=v1)")
+    p.add_argument("--check", action="store_true",
+                   help="vérifie que --out correspond aux entrées actuelles (n'écrit rien)")
     args = p.parse_args()
 
     labels = None if args.no_labels else args.labels
     if labels is not None and not labels.exists():
         print(f"Fichier de libellés introuvable : {labels}", file=sys.stderr)
         return 1
+    if args.check:
+        return check(args.constraints, args.population, args.out, args.seed, labels)
     m = build(args.constraints, args.population, args.out, args.seed, labels)
     print(f"{m['n_agents']} agents -> {args.out}/agents.csv et agents.jsonl")
-    print(f"  personas contraintes distinctes : {m['distinct_base_personas']}")
-    print(f"  identités distinctes            : {m['distinct_agents']}")
-    print(f"  marges                          : erreur L1={m['margin_error']}")
+    print(f"  identités uniques                : {m['distinct_agents']}")
+    print(f"  profils distincts (12 attributs) : {m['distinct_profiles']}")
+    print(f"  copies en trop conservées       : {m['exact_copies']} "
+          f"({m['duplicated_agents']} agents concernés, max ×{m['max_copies']}, champ cluster_id)")
+    print(f"  marges                           : erreur L1={m['margin_error']}")
     return 0
 
 

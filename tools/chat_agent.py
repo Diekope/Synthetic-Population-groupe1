@@ -12,7 +12,8 @@ Fournisseurs :
 Exemples :
   uv run python tools/chat_agent.py --list
   uv run python tools/chat_agent.py --agent 42 --message "Tu travailles dans quoi ?"
-  uv run python tools/chat_agent.py --agent 42                  # REPL
+  uv run python tools/chat_agent.py --agent 42                  # REPL (flux en direct)
+  uv run python tools/chat_agent.py --agent 42 --seed 0 --temperature 0.7 --max-tokens 200
   OPENAI_API_KEY=... uv run python tools/chat_agent.py --agent 42 --provider openai
   uv run python tools/chat_agent.py --agent 42 --provider ollama --model llama3.2:1b
 """
@@ -23,11 +24,13 @@ import json
 import os
 import random
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 QUIT = {"/quit", "/exit", "/q"}
+RETRY_CODES = {429, 500, 502, 503, 504}
 
 
 class LLMError(RuntimeError):
@@ -49,10 +52,10 @@ def load_agents(path: Path) -> list[dict]:
     return agents
 
 
-def select_agent(agents: list[dict], query: str) -> dict:
+def select_agent(agents: list[dict], query: str, seed: int | None = None) -> dict:
     q = query.strip().lower()
     if q == "random":
-        return random.choice(agents)
+        return random.Random(seed).choice(agents)
     for a in agents:
         if str(a["id"]) == q or a["identity_key"].lower() == q:
             return a
@@ -74,28 +77,137 @@ def build_messages(agent: dict, history: list[dict]) -> list[dict]:
     return [{"role": "system", "content": agent["persona"]}, *history]
 
 
-def call_openai(messages: list[dict], model: str) -> str:
+# --------------------------------------------------------- budget de contexte
+
+def estimate_tokens(text: str) -> int:
+    """Estimation grossière (~4 caractères par token)."""
+    return max(1, len(text or "") // 4)
+
+
+def trim_history(history: list[dict], budget_tokens: int, *,
+                 system_tokens: int = 0) -> list[dict]:
+    """Ne garde que les messages les plus récents qui tiennent dans le budget.
+
+    On garde toujours au moins le dernier message. Évite qu'un long historique
+    fasse dépasser la fenêtre de contexte (et tronque silencieusement la persona).
+    """
+    kept: list[dict] = []
+    total = system_tokens
+    for m in reversed(history):
+        t = estimate_tokens(m.get("content", ""))
+        if kept and total + t > budget_tokens:
+            break
+        total += t
+        kept.append(m)
+    return list(reversed(kept))
+
+
+# ------------------------------------------------------------------- réseau
+
+def _backoff(attempt: int) -> float:
+    return min(8.0, 0.5 * (2 ** attempt)) * (0.7 + 0.6 * random.random())
+
+
+def _open(req: urllib.request.Request, timeout: float):
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _read_openai_stream(r, on_token) -> str:
+    parts: list[str] = []
+    for raw in r:
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            obj = json.loads(data)
+        except ValueError:
+            continue
+        choices = obj.get("choices") or [{}]
+        piece = (choices[0].get("delta") or {}).get("content")
+        if piece:
+            parts.append(piece)
+            if on_token:
+                on_token(piece)
+    return "".join(parts).strip()
+
+
+def _read_ollama_stream(r, on_token) -> str:
+    parts: list[str] = []
+    for raw in r:
+        line = raw.decode("utf-8", "replace").strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        if obj.get("error"):
+            raise LLMError(f"Ollama : {obj['error']}")
+        piece = (obj.get("message") or {}).get("content")
+        if piece:
+            parts.append(piece)
+            if on_token:
+                on_token(piece)
+        if obj.get("done"):
+            break
+    return "".join(parts).strip()
+
+
+def call_openai(messages: list[dict], model: str, temperature: float = 0.8, *,
+                max_tokens: int | None = None, seed: int | None = None,
+                stream: bool = False, on_token=None, timeout: float = 120,
+                retries: int = 2) -> str:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise LLMError("OPENAI_API_KEY manquante.")
     base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.8}).encode()
-    req = urllib.request.Request(
-        f"{base}/chat/completions", data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            data = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise LLMError(f"API OpenAI : HTTP {e.code} — {e.read().decode(errors='replace')[:500]}")
-    except urllib.error.URLError as e:
-        raise LLMError(f"API OpenAI injoignable : {e.reason}")
-    return data["choices"][0]["message"]["content"].strip()
+    payload: dict = {"model": model, "messages": messages,
+                     "temperature": temperature, "stream": stream}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    body = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    last = ""
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(f"{base}/chat/completions", data=body, headers=headers)
+        try:
+            with _open(req, timeout) as r:
+                if stream:
+                    return _read_openai_stream(r, on_token)
+                return json.load(r)["choices"][0]["message"]["content"].strip()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:400]
+            if e.code in RETRY_CODES and attempt < retries:
+                last = f"HTTP {e.code}"
+                time.sleep(_backoff(attempt))
+                continue
+            raise LLMError(f"API OpenAI : HTTP {e.code} — {detail}")
+        except urllib.error.URLError as e:
+            if attempt < retries:
+                last = str(e.reason)
+                time.sleep(_backoff(attempt))
+                continue
+            raise LLMError(f"API OpenAI injoignable : {e.reason}")
+    raise LLMError(f"API OpenAI : échec après {retries + 1} essais ({last})")
 
 
-def call_ollama(messages: list[dict], model: str) -> str:
+def call_ollama(messages: list[dict], model: str, temperature: float = 0.8, *,
+                max_tokens: int | None = None, seed: int | None = None,
+                stream: bool = False, on_token=None, timeout: float = 300,
+                retries: int = 2) -> str:
     base = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    payload = {"model": model, "messages": messages, "stream": False}
+    # num_ctx : le défaut peut être trop petit et tronquer la persona dès que
+    # l'historique grandit (échec silencieux). On le fixe explicitement.
+    num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", "4096"))
+    options: dict = {"temperature": temperature, "num_ctx": num_ctx}
+    if max_tokens:
+        options["num_predict"] = max_tokens
+    if seed is not None:
+        options["seed"] = seed
+    payload: dict = {"model": model, "messages": messages, "stream": stream,
+                     "options": options}
     # Les modèles « reasoning » (qwen3, deepseek-r1…) brûlent le budget en réflexion
     # avant de répondre. On la coupe par défaut ; OLLAMA_THINK=1 pour la réactiver.
     think = os.environ.get("OLLAMA_THINK", "").lower()
@@ -104,14 +216,31 @@ def call_ollama(messages: list[dict], model: str) -> str:
     elif any(tag in model.lower() for tag in ("qwen3", "deepseek-r1", "qwq", "reason")):
         payload["think"] = False
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(base + "/api/chat", data=body,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            data = json.load(r)
-    except urllib.error.URLError as e:
-        raise LLMError(f"Ollama injoignable ({base}) : {e.reason}. Lance `ollama serve`.")
-    return data["message"]["content"].strip()
+    last = ""
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(base + "/api/chat", data=body,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with _open(req, timeout) as r:
+                if stream:
+                    return _read_ollama_stream(r, on_token)
+                return json.load(r)["message"]["content"].strip()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:300]
+            if e.code == 404:
+                raise LLMError(f"Modèle Ollama introuvable : {model} (ollama pull {model})")
+            if e.code in RETRY_CODES and attempt < retries:
+                last = f"HTTP {e.code}"
+                time.sleep(_backoff(attempt))
+                continue
+            raise LLMError(f"Ollama : HTTP {e.code} — {detail}")
+        except urllib.error.URLError as e:
+            if attempt < retries:
+                last = str(e.reason)
+                time.sleep(_backoff(attempt))
+                continue
+            raise LLMError(f"Ollama injoignable ({base}) : {e.reason}. Lance `ollama serve`.")
+    raise LLMError(f"Ollama : échec après {retries + 1} essais ({last})")
 
 
 def call_mock(agent: dict, messages: list[dict]) -> str:
@@ -122,18 +251,27 @@ def call_mock(agent: dict, messages: list[dict]) -> str:
             "Branche un vrai fournisseur (--provider openai|ollama) pour une vraie réponse.")
 
 
-def respond(agent: dict, history: list[dict], provider: str, model: str) -> str:
+def respond(agent: dict, history: list[dict], provider: str, model: str,
+            temperature: float = 0.8, max_tokens: int | None = None,
+            seed: int | None = None, stream: bool = False, on_token=None) -> str:
     messages = build_messages(agent, history)
     if provider == "mock":
-        return call_mock(agent, messages)
+        answer = call_mock(agent, messages)
+        if on_token:
+            on_token(answer)
+        return answer
     if provider == "openai":
-        return call_openai(messages, model)
+        return call_openai(messages, model, temperature, max_tokens=max_tokens,
+                           seed=seed, stream=stream, on_token=on_token)
     if provider == "ollama":
-        return call_ollama(messages, model)
+        return call_ollama(messages, model, temperature, max_tokens=max_tokens,
+                           seed=seed, stream=stream, on_token=on_token)
     raise LLMError(f"Fournisseur inconnu : {provider}")
 
 
-def repl(agent: dict, agents: list[dict], provider: str, model: str, max_turns: int) -> None:
+def repl(agent: dict, agents: list[dict], provider: str, model: str, max_turns: int,
+         *, stream: bool = True, max_tokens: int | None = None, seed: int | None = None,
+         budget_tokens: int = 3000) -> None:
     history: list[dict] = []
     print(describe(agent))
     print("Discussion ouverte. /help pour les commandes.\n")
@@ -161,21 +299,31 @@ def repl(agent: dict, agents: list[dict], provider: str, model: str, max_turns: 
             print("historique effacé.")
             continue
         if line.startswith("/agent "):
-            agent = select_agent(agents, line.split(maxsplit=1)[1])
+            agent = select_agent(agents, line.split(maxsplit=1)[1], seed)
             history.clear()
             print(describe(agent))
             continue
         history.append({"role": "user", "content": line})
-        try:
-            answer = respond(agent, history, provider, model)
-        except LLMError as e:
-            history.pop()
-            print(f"erreur : {e}\n")
-            continue
-        history.append({"role": "assistant", "content": answer})
         if max_turns and len(history) > 2 * max_turns:
             del history[: len(history) - 2 * max_turns]
-        print(f"\n{agent['prenom']}> {answer}\n")
+        sent = trim_history(history, budget_tokens,
+                            system_tokens=estimate_tokens(agent["persona"]))
+        try:
+            if stream:
+                print(f"\n{agent['prenom']}> ", end="", flush=True)
+                answer = respond(agent, sent, provider, model, max_tokens=max_tokens,
+                                 seed=seed, stream=True,
+                                 on_token=lambda piece: print(piece, end="", flush=True))
+                print("\n")
+            else:
+                answer = respond(agent, sent, provider, model, max_tokens=max_tokens,
+                                 seed=seed)
+                print(f"\n{agent['prenom']}> {answer}\n")
+        except LLMError as e:
+            history.pop()
+            print(f"\nerreur : {e}\n")
+            continue
+        history.append({"role": "assistant", "content": answer})
 
 
 def main() -> int:
@@ -190,6 +338,13 @@ def main() -> int:
                    help="défaut : OPENAI_MODEL / OLLAMA_MODEL / gpt-4o-mini / llama3.1")
     p.add_argument("--max-turns", type=int, default=12,
                    help="messages échangés conservés (0 = illimité)")
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="longueur maximale de la réponse")
+    p.add_argument("--seed", type=int, default=None,
+                   help="graine (sélection 'random' et échantillonnage du modèle)")
+    p.add_argument("--budget-tokens", type=int, default=3000,
+                   help="budget de contexte pour l'historique")
+    p.add_argument("--no-stream", action="store_true", help="désactive le flux en direct")
     args = p.parse_args()
 
     agents = load_agents(args.agents)
@@ -200,7 +355,7 @@ def main() -> int:
     if args.agent is None:
         p.error("--agent est requis (ou --list). Exemple : --agent 1")
 
-    agent = select_agent(agents, args.agent)
+    agent = select_agent(agents, args.agent, args.seed)
     model = args.model or os.environ.get("OPENAI_MODEL") or os.environ.get("OLLAMA_MODEL")
     if not model:
         model = {"openai": "gpt-4o-mini", "ollama": "llama3.2:1b"}.get(args.provider, "mock")
@@ -208,13 +363,16 @@ def main() -> int:
     if args.message:
         history = [{"role": "user", "content": args.message}]
         try:
-            print(respond(agent, history, args.provider, model))
+            print(respond(agent, history, args.provider, model,
+                          max_tokens=args.max_tokens, seed=args.seed))
         except LLMError as e:
             print(f"erreur : {e}", file=sys.stderr)
             return 2
         return 0
 
-    repl(agent, agents, args.provider, model, args.max_turns)
+    repl(agent, agents, args.provider, model, args.max_turns,
+         stream=not args.no_stream, max_tokens=args.max_tokens, seed=args.seed,
+         budget_tokens=args.budget_tokens)
     return 0
 
 

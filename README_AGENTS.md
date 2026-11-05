@@ -39,6 +39,26 @@ Garanties vérifiées par les tests :
 - 500 `identity_key` distinctes ;
 - 500 vecteurs d'attributs distincts.
 
+### Identités vs profils : les copies exactes sont conservées
+
+Les prénoms rendent les **identités** uniques, pas les **profils**. Sur les 12
+attributs contraints il n'existe que **302 profils** : 198 agents sont donc des
+copies exactes d'un autre agent et répondront de façon quasi identique à modèle
+et température égaux. Ces copies ne sont ni supprimées ni déguisées, elles sont
+exposées :
+
+| Champ (`agents.jsonl` / `agents.csv`) | Sens |
+|---|---|
+| `cluster_id` | identifiant du profil (`p` + hash des 12 attributs), partagé par toutes ses copies |
+| `copy_index` | rang de l'agent dans son cluster (1..N) |
+| `copies` | nombre d'agents qui portent exactement ce profil |
+
+Dans la GUI, le badge `×N` de la liste, la bannière sous l'en-tête du chat et
+l'onglet **Copies exactes** montrent le cluster et permettent de passer d'une
+copie à l'autre. `manifest.json` ajoute `distinct_profiles` (302),
+`duplicated_agents` (227 agents partagent leur profil), `exact_copies`
+(198 lignes redondantes) et `max_copies` (48).
+
 ---
 
 ## 2. Démarrage rapide
@@ -54,7 +74,10 @@ uv run python tools/gui.py --open
 # 3. conversation en terminal
 uv run python tools/chat_agent.py --agent 42 --provider ollama --model llama3.2:1b
 
-# 4. tests
+# 4. sonder la population (démo hors ligne sur 8 agents)
+uv run python tools/survey.py surveys/demo.fr.json --provider mock --limit 8 --seed 0
+
+# 5. tests
 uv run python -m unittest discover -s tests -v
 ```
 
@@ -69,17 +92,24 @@ Ollama est optionnel ; sans lui, le fournisseur `mock` permet de tester le câbl
 tools/
   build_agents.py            # population -> agents identifiables
   chat_agent.py              # CLI de conversation (mock / OpenAI / Ollama)
+  survey.py                  # sonde : poser un questionnaire à tout/partie des agents
+  eval_fidelity.py           # mesure le respect des profils (une question par attribut)
+  fidelity_probes.fr.json    # questions et motifs acceptés pour eval_fidelity
   gui.py                     # serveur local + interface web (stdlib)
   bench_models.py            # latence, tokens/s, VRAM des modèles Ollama
   agent_labels.fr.json       # libellés réels des 12 attributs
+surveys/
+  demo.fr.json               # questionnaire d'exemple (5 questions)
 agents/
-  agents.csv                 # id, identity_key, prenom, nom, A0..A11
+  agents.csv                 # id, stable_id, identity_key, cluster_id, copy_index, copies, prenom, nom, A0..A11
   agents.jsonl               # un agent par ligne + prompt système
   labels.json                # copie des libellés utilisée par la GUI
   manifest.json              # contrôles (unicité, marges, seed)
 tests/
   test_agents.py             # pipeline, marges, unicité, prompt
   test_gui.py                # API HTTP de la GUI
+  test_survey.py             # sélection, sonde mock, reprise, agrégation
+  test_eval_fidelity.py      # appariement, harnais mock, CLI
 docs/
   gui.png                    # aperçu
 ```
@@ -89,9 +119,13 @@ docs/
 ```json
 {
   "id": 1,
+  "stable_id": "d41275b8-6cb6-501b-a39e-c22f8afd4792",
   "prenom": "Zoé",
   "nom": "François",
   "identity_key": "72da82b12be8",
+  "cluster_id": "p3f0c1a9d2",
+  "copy_index": 1,
+  "copies": 3,
   "attributes": {"A0": "v1", "...": "...", "prenom": "Zoé", "nom": "François"},
   "persona": "Tu es Zoé François.\nTu participes à une discussion..."
 }
@@ -100,6 +134,11 @@ docs/
 `persona` est le prompt système envoyé au modèle. L'identité (`identity_key`) est
 une métadonnée : elle n'est **pas** dans le prompt, pour éviter que les petits
 modèles s'y accrochent et sortent du personnage.
+
+`stable_id` est un **UUIDv5** dérivé de `identity_key` : une clé standard, opaque
+et sans collision, utilisable comme identifiant externe (base de données, suivi
+d'un agent). Il ne dépend que des attributs, donc il change lui aussi si la
+population est régénérée ; `id` (numéro de ligne) n'est qu'un rang de lecture.
 
 ---
 
@@ -120,13 +159,25 @@ et affiche celui qu'il utilise.
 | Zone | Contenu |
 |---|---|
 | **Agents** | 500 lignes, recherche nom/clé/id, filtre `attribut = valeur` |
-| **Atlas** | nuage 2D sur deux attributs ; orange = persona dupliquée ; clic = sélection |
+| **Atlas** | essaim animé : chaque agent est une bille 3D avec de petits yeux clignotants, immobile la plupart du temps, qui saute de temps en temps vers un point aléatoire ; orange = profil dupliqué ; un filtre regroupe les agents dans leurs cellules X/Y ; clic = sélection |
 | **Attributs** | distribution des 12 marges, avec les comptes exacts |
-| **Doublons** | personas ×2 à ×48, clic vers un représentant |
+| **Copies exactes** | profils partagés ×2 à ×N, membres du cluster cliquables |
+| **Sonder** | lance un questionnaire sur tout/partie des agents avec le modèle courant, suit la progression et affiche les résultats agrégés (barres + tableaux croisés) |
 | **Chat** | historique, latence, choix fournisseur/modèle |
 
 La GUI écoute sur `127.0.0.1` par défaut, **sans authentification**. Ne l'expose
 pas sur un réseau public : elle peut appeler ton fournisseur LLM avec ta clé.
+
+L'**Atlas** est un essaim : chaque point est une bille 3D avec de petits yeux qui
+clignotent. La bille reste **immobile la plupart du temps** et, de temps en temps,
+fait un petit **saut** (trajectoire balistique avec ombre au sol) vers un point
+voisin, donc l'essaim est dispersé partout par défaut. Dès qu'un filtre
+(recherche ou `attribut = valeur`) est actif, les agents correspondants rejoignent
+leur cellule `X × Y` et les autres s'estompent — y compris quand l'animation est
+en pause. `animer` met le mouvement en pause ; `prefers-reduced-motion` désactive
+l'animation au chargement. La position dans la grille n'est donc **pas** une
+projection des 12 attributs : seuls X et Y comptent pour le regroupement, le
+profil complet reste dans le panneau de droite.
 
 Le sélecteur de modèle liste les modèles Ollama installés avec leur taille ; les
 modèles d'embedding sont masqués.
@@ -146,13 +197,26 @@ uv run python tools/chat_agent.py --agent 42
 Commandes du REPL : `/who`, `/attrs`, `/agent <id|clé|nom>`, `/reset`, `/quit`.
 L'agent peut être désigné par son id, sa clé d'identité ou son nom.
 
+### Fiabilité et flux
+
+- **Flux en direct** : le REPL et la GUI affichent la réponse **jeton par jeton**
+  (Ollama et OpenAI en streaming ; `--no-stream` pour désactiver en CLI).
+- **Nouvelle tentative automatique** : les erreurs réseau et les codes `429`,
+  `500`, `502`, `503`, `504` sont réessayés avec un délai exponentiel (2 essais) ;
+  un `404` Ollama (« modèle introuvable ») échoue tout de suite, sans réessai.
+- **Budget de contexte** : l'historique est coupé par **taille estimée**
+  (`--budget-tokens`, défaut 3000), pas par nombre de messages, pour ne pas
+  dépasser la fenêtre ni tronquer la persona.
+- **Contrôles** : `--temperature`, `--max-tokens`, `--seed` (rend aussi
+  reproductible la sélection `--agent random`).
+
 ### Fournisseurs
 
 | `--provider` | Prérequis | Variables |
 |---|---|---|
 | `mock` (défaut) | aucun, hors ligne | — |
 | `openai` | clé API | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` |
-| `ollama` | `ollama serve` | `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_THINK` |
+| `ollama` | `ollama serve` | `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_THINK`, `OLLAMA_NUM_CTX` |
 
 ```bash
 OPENAI_API_KEY=sk-... uv run python tools/chat_agent.py --agent 42 --provider openai
@@ -161,11 +225,107 @@ uv run python tools/chat_agent.py --agent 42 --provider ollama --model llama3.2:
 
 `mock` ne simule pas une conversation : il vérifie le pipeline sans réseau.
 `OLLAMA_THINK=0` (défaut pour qwen3/deepseek-r1) coupe la réflexion, qui consomme
-le budget de tokens avant la réponse.
+le budget de tokens avant la réponse. `OLLAMA_NUM_CTX` (défaut 4096) fixe la
+fenêtre de contexte : trop petite, elle tronque la persona dès que l'historique
+grandit (échec silencieux).
+
+**Cohérence de la persona.** Le prompt système exige de répondre avec
+**exactement** la valeur du profil pour toute information qu'il contient (âge,
+logement, revenu…). Avec un petit modèle, la fidélité n'est pas garantie : vérifie
+sur un échantillon. Deux agents qui partagent un `cluster_id` (copies exactes)
+donnent des réponses quasi identiques à modèle et température égaux.
+
+La conversation est **isolée par agent** : changer d'agent dans la GUI (ou
+`/agent` en CLI) repart d'un historique vide, et l'en-tête du chat affiche le
+`cluster_id` de l'agent courant.
 
 ---
 
-## 6. Quel modèle pour 500 agents ?
+## 6. Sonder la population (survey)
+
+`tools/survey.py` pose **le même questionnaire à tout ou partie des agents** et
+agrège les réponses. C'est l'outil qui transforme la population en instrument :
+on ne discute plus avec un agent, on interroge un échantillon.
+
+Le questionnaire est un JSON :
+
+```json
+{
+  "title": "Baromètre 2026",
+  "questions": [
+    {"id": "climat", "text": "Le changement climatique est-il une priorité ?",
+     "choices": ["oui", "non", "ne se prononce pas"]},
+    {"id": "plus_important", "text": "Quelle mesure améliorerait votre quotidien ?"}
+  ]
+}
+```
+
+Une question avec `choices` est fermée (le choix est reconnu dans la réponse,
+accents/casse/ponctuation ignorés) ; sans `choices`, la réponse est libre.
+
+### Sélection : tout, ou une partie
+
+| Option | Effet |
+|---|---|
+| *(aucune)* | les 500 agents |
+| `--one-per-cluster` | un seul agent par profil contraint (302, évite de sur-pondérer les copies exactes) |
+| `--where A1=v2` | agents vérifiant `attribut=valeur` (répétable, ou `--where A1=v2,A9=v1`) |
+| `--ids 1,5,23` | identifiants explicites |
+| `--limit 50 --seed 0` | échantillon aléatoire reproductible |
+
+### Exécution
+
+```bash
+# démonstration hors ligne (aucun réseau), 8 agents
+uv run python tools/survey.py surveys/demo.fr.json --provider mock --limit 8 --seed 0
+
+# vraie sonde locale sur les 302 profils distincts
+uv run python tools/survey.py surveys/demo.fr.json --one-per-cluster \
+    --provider ollama --model llama3.2:1b --concurrency 2
+
+# sous-population + tableau croisé par sexe et classe d'âge
+uv run python tools/survey.py surveys/demo.fr.json --where A1=v2 --crosstab A1,A9
+```
+
+- **Concurrence bornée** (`--concurrency`, 1–4 conseillé pour Ollama, qui met le
+  reste en file).
+- **Reprise** : les réponses sont écrites au fil de l'eau dans
+  `surveys/<nom>.answers.jsonl`. Relancer la même commande **saute** les couples
+  (agent, question) déjà faits — utile si un run est interrompu. `--force` repart
+  de zéro.
+- `--shuffle` tire l'ordre des questions par agent (détecter un effet d'ordre).
+- Le fournisseur `mock` répond de façon **déterministe** (hachage de
+  `identity_key` + question) : il valide tout le pipeline sans modèle.
+
+### La sonde depuis la GUI
+
+L'onglet **Sonder** fait la même chose sans ligne de commande : il utilise le
+questionnaire choisi, la portée (tous / un par profil / filtre courant /
+échantillon), le fournisseur et le modèle du bandeau. La sonde tourne en
+arrière-plan (barre de progression) et les résultats s'affichent en barres avec
+le tableau croisé demandé. Chaque lancement est **frais** et écrit un fichier
+`surveys/<nom>.<provider>.<model>.answers.jsonl`, pour ne jamais mélanger deux
+modèles dans un même fichier.
+
+> **Copies exactes** : en portée « tous », les agents qui partagent un profil
+> (×2 à ×48) répondent de façon identique. Utilise « un par profil » (302) pour
+> ne pas sur-pondérer un même profil.
+
+### Sortie
+
+- `surveys/<nom>.answers.jsonl` : une ligne par `(agent, question)` avec l'agent,
+  son `cluster_id`, la question, la réponse brute, le `choice` reconnu, le modèle
+  et la latence.
+- `surveys/<nom>.report.json` : par question, la répartition des choix, les
+  proportions, les erreurs, et les tableaux croisés demandés. Le terminal affiche
+  la même chose en barres.
+
+Ces fichiers sont ignorés par git (`surveys/*.answers.jsonl`,
+`surveys/*.report.json`).
+
+---
+
+## 7. Quel modèle pour 500 agents ?
 
 **Un seul modèle suffit.** La persona est dans le prompt : une instance Ollama
 sert les 500 agents. La mémoire consommée est celle du modèle + le cache de
@@ -198,9 +358,33 @@ latence médiane, les tokens/s et la VRAM sur une vraie persona du fichier
 `agents/agents.jsonl`.
 
 **Recommandation** : `llama3.2:1b` pour explorer la population, `llama3.2:3b`
-quand la qualité de la persona compte. Pour des questions factuelles sur le profil
-(âge, revenu, logement), le 3B est nettement plus fidèle aux attributs ; le 0.6B
-répond souvent à côté.
+quand la qualité de la persona compte. Le choix d'un modèle ne se fait plus
+seulement sur la vitesse : `tools/eval_fidelity.py` mesure le **respect des
+profils**.
+
+### Fidélité mesurée aux attributs
+
+`eval_fidelity.py` pose une question factuelle par attribut (12 par agent) et
+vérifie que la réponse correspond au profil. Exemple :
+
+```bash
+uv run python tools/eval_fidelity.py --one-per-cluster \
+    --models llama3.2:1b,qwen3:0.6b,huihui_ai/llama3.2-abliterate:3b
+```
+
+Sur 10 agents (120 questions, temperature 0, seed 0) :
+
+| Modèle | Fidélité | Faiblesses |
+|---|---|---|
+| **`qwen3:0.6b`** | **98 %** | A2 (lieu), A10 (voitures) |
+| `huihui_ai/llama3.2-abliterate:3b` | 95 % | A0 (diplôme), A11 (santé) |
+| `llama3.2:1b` | 91 % | A2, A5 (revenu), A7, A10 |
+
+Lecture : un petit modèle peut être **très fidèle aux attributs** (le 0.6B) même
+s'il tient mal un personnage long, et inversement. Mesure sur un échantillon
+(10 agents) : pour trancher, relance sur `--one-per-cluster` (302 agents). Les
+sondes (`tools/fidelity_probes.fr.json`) reposent sur la même sémantique supposée
+que les libellés ; adapte-les si tu connais les vrais attributs.
 
 ### Questions sans filtres
 
@@ -226,7 +410,7 @@ stéréotypes, des erreurs factuelles, et sortir du personnage. Valider un
 
 ---
 
-## 7. Attributs réels
+## 8. Attributs réels
 
 Les libellés d'origine de `A0..A11` **ne figurent pas dans le repo**. Pour rendre
 les conversations possibles, `tools/agent_labels.fr.json` propose une
@@ -277,25 +461,27 @@ reste plus vague sur les chiffres.
 
 ---
 
-## 8. Tests
+## 9. Tests
 
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
 
-20 tests couvrent :
+55 tests couvrent :
 
 - l'exactitude des marges après enrichissement ;
-- l'unicité des identités et des vecteurs d'attributs ;
+- l'unicité des identités, des `stable_id` et des vecteurs d'attributs ;
+- le déterminisme (même seed → sortie identique) et le mode `--check` ;
 - la complétude du prompt ;
 - l'application des libellés réels et la cohérence prénom/sexe ;
-- la sélection d'agent (id, clé, nom) ;
-- l'API de la GUI (liste, méta, chat, erreurs) ;
+- la sélection d'agent (id, clé, nom), le budget de contexte et les reprises sur erreur ;
+- l'API de la GUI (liste, méta, chat, chat en flux, sondage, erreurs) ;
+- la sélection et l'agrégation de la sonde, et l'appariement de fidélité ;
 - le CLI `--list` et le chat one-shot en mode mock.
 
 ---
 
-## 9. Limites
+## 10. Limites
 
 - `prenom`/`nom` sont des métadonnées d'identité, pas des variables contraintes :
   ne pas les traiter comme un signal démographique.
@@ -306,8 +492,31 @@ uv run python -m unittest discover -s tests -v
 
 ---
 
-## 10. Voir aussi
+## 11. Voir aussi
 
 - `README.md` (repo principal) : problème des marges, algorithme greedy,
   dé-clonage, résultats et optimum CP-SAT.
 - Branche `feature/agents`, worktree `Synthetic-Population-agents`.
+
+---
+
+## 12. Reproductibilité et provenance
+
+- **Sortie déterministe** : à seed et entrées égales, `build_agents.py` produit
+  des fichiers **identiques octet à octet** (vérifié par un test).
+- **`stable_id`** : UUIDv5 par agent, clé externe stable et sans collision.
+- **Provenance** dans `agents/manifest.json` : `tool`, `tool_version`, `seed`,
+  `git_commit`, et les empreintes SHA-256 des **entrées**
+  (`constraints_sha256`, `population_sha256`, `labels_sha256`). On peut donc
+  savoir exactement quelle population et quels libellés ont produit les agents.
+- **Mode `--check`** : vérifie que `agents/` correspond aux entrées actuelles,
+  sans rien écrire. À lancer en CI ou après une modification de `population.csv` :
+
+```bash
+uv run python tools/build_agents.py constraint_cells.csv population.csv --check
+# agents est à jour (entrées inchangées, seed 0).
+```
+
+- **Environnement** : `pyproject.toml` fixe `requires-python >= 3.12` ; aucune
+  dépendance pour la GUI, la CLI, la sonde et l'évaluation (stdlib seule).
+- **CI** : `.github/workflows/tests.yml` lance le `--check` puis les tests.

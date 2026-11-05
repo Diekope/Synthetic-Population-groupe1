@@ -1,0 +1,29 @@
+{
+  "title": "Baromètre 2026",
+  "questions": [
+    {
+      "id": "teletravail",
+      "text": "Êtes-vous favorable au télétravail ?",
+      "choices": ["tout à fait favorable", "plutôt favorable", "plutôt défavorable", "tout à fait défavorable", "ne se prononce pas"]
+    },
+    {
+      "id": "climat",
+      "text": "Le changement climatique est-il une priorité pour vous ?",
+      "choices": ["oui", "non", "ne se prononce pas"]
+    },
+    {
+      "id": "transports",
+      "text": "Quel moyen de transport utilisez-vous le plus au quotidien ?",
+      "choices": ["voiture", "transports en commun", "vélo ou marche", "je ne me déplace pas"]
+    },
+    {
+      "id": "budget",
+      "text": "Comment jugez-vous votre situation financière actuelle ?",
+      "choices": ["confortable", "juste", "difficile"]
+    },
+    {
+      "id": "plus_important",
+      "text": "Quelle est la mesure la plus importante pour améliorer votre quotidien ?"
+    }
+  ]
+}

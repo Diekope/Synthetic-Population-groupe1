@@ -1,0 +1,101 @@
+{
+  "_comment": "Sondes de fidélité : une question factuelle par attribut et, par valeur, des motifs acceptés. Les libellés de agent_labels.fr.json sont ajoutés automatiquement aux motifs. Ce fichier suppose la même sémantique que les libellés (eux-mêmes supposés) : adapte-le si tu connais les vrais attributs.",
+  "attributes": {
+    "A0": {
+      "question": "Quel est votre niveau de diplôme le plus élevé ?",
+      "values": {
+        "v0": {"accept": ["cap", "bep", "certificat d'aptitude"]},
+        "v1": {"accept": ["bac", "baccalaureat", "licence", "master", "doctorat", "superieur", "etudes superieures", "universite"]},
+        "v2": {"accept": ["sans diplome", "aucun diplome", "pas de diplome", "sans qualification", "n'ai pas de diplome"]}
+      }
+    },
+    "A1": {
+      "question": "Quel est votre sexe ?",
+      "values": {
+        "v0": {"accept": ["homme", "masculin"]},
+        "v1": {"accept": ["autre", "non precise", "non binaire", "ne souhaite pas"]},
+        "v2": {"accept": ["femme", "feminin"]}
+      }
+    },
+    "A2": {
+      "question": "Où habitez-vous ?",
+      "values": {
+        "v0": {"accept": ["rural", "rurale", "campagne", "village", "commune rurale"]},
+        "v1": {"accept": ["outre-mer", "outremer", "dom", "tom", "guadeloupe", "martinique", "reunion", "guyane", "mayotte"]},
+        "v2": {"accept": ["grande ville", "ville", "urbain", "agglomeration", "metropole"]}
+      }
+    },
+    "A3": {
+      "question": "Êtes-vous propriétaire ou locataire de votre logement ?",
+      "values": {
+        "v0": {"accept": ["proprietaire", "proprio", "j'ai achete"]},
+        "v1": {"accept": ["gratuit", "gratuitement", "heberge", "loge gratuitement", "sans loyer"]},
+        "v2": {"accept": ["locataire", "location", "je loue", "en location"]}
+      }
+    },
+    "A4": {
+      "question": "Quelle est votre situation familiale ?",
+      "values": {
+        "v0": {"accept": ["celibataire", "seul", "seule", "sans conjoint"]},
+        "v1": {"accept": ["en couple", "marie", "mariee", "pacse", "pacsee", "concubin", "vie commune"]},
+        "v2": {"accept": ["divorce", "divorcee", "veuf", "veuve", "separe", "separee"]}
+      }
+    },
+    "A5": {
+      "question": "Quel est le revenu mensuel de votre ménage ?",
+      "values": {
+        "v0": {"accept": ["moins de 1 500", "moins de 1500", "inferieur a 1500", "sous les 1500"], "range": [0, 1499]},
+        "v1": {"accept": ["de 1 500 a 2 500", "entre 1500 et 2500", "autour de 2000"], "range": [1500, 2500]},
+        "v2": {"accept": ["plus de 2 500", "plus de 2500", "superieur a 2500", "au-dela de 2500"], "range": [2501, 999999]}
+      }
+    },
+    "A6": {
+      "question": "Quelle est votre nationalité ?",
+      "values": {
+        "v0": {"accept": ["union europeenne", "europeenne", "ue", "europeen"]},
+        "v1": {"accept": ["hors union", "hors ue", "non europeenne", "etrangere", "etranger"]},
+        "v2": {"accept": ["francaise", "francais", "de nationalite francaise"]}
+      }
+    },
+    "A7": {
+      "question": "Avez-vous des enfants à charge ?",
+      "values": {
+        "v0": {"accept": ["oui", "j'ai des enfants"]},
+        "v1": {"accept": ["non", "pas d'enfant", "aucun enfant"]},
+        "v2": {"accept": ["non renseigne", "ne sais pas", "je ne sais pas", "prefere ne pas", "sans reponse"]}
+      }
+    },
+    "A8": {
+      "question": "Avez-vous accès à Internet à votre domicile ?",
+      "values": {
+        "v0": {"accept": ["non", "pas d'internet", "sans internet", "pas de connexion"]},
+        "v1": {"accept": ["oui", "j'ai internet", "acces a internet", "connecte"]},
+        "v2": {"accept": ["ne sais pas", "je ne sais pas", "ne se prononce pas"]}
+      }
+    },
+    "A9": {
+      "question": "Quel âge avez-vous ?",
+      "values": {
+        "v0": {"accept": ["18 a 39", "18-39", "jeune adulte"], "range": [18, 39]},
+        "v1": {"accept": ["40 a 59", "40-59"], "range": [40, 59]},
+        "v2": {"accept": ["60 ans et plus", "60 et plus", "senior", "retraite"], "range": [60, 120]}
+      }
+    },
+    "A10": {
+      "question": "Combien de voitures possédez-vous ?",
+      "values": {
+        "v0": {"accept": ["aucune", "pas de voiture", "zero voiture", "aucune voiture", "sans voiture"], "range": [0, 0]},
+        "v1": {"accept": ["deux", "2 voitures", "plusieurs voitures", "trois"], "range": [2, 20]},
+        "v2": {"accept": ["une voiture", "1 voiture", "une seule voiture", "seule voiture", "j'ai une voiture", "ma voiture"], "range": [1, 1]}
+      }
+    },
+    "A11": {
+      "question": "Comment évaluez-vous votre état de santé général ?",
+      "values": {
+        "v0": {"accept": ["tres bon", "excellent", "excellente"]},
+        "v1": {"accept": ["bon", "bonne sante", "correcte"]},
+        "v2": {"accept": ["limite", "limitee", "mauvais", "mauvaise", "fragile", "altere"]}
+      }
+    }
+  }
+}
