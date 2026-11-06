@@ -1,0 +1,20 @@
+{
+  "id": "EV-BASELINE-001",
+  "date": "2026-11-06",
+  "class": "observation",
+  "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+  "branch": "feature/agents-toolkit",
+  "implementation_revision": "6a858cb5e5a3fef119fd3153af8f1be917abbf2b",
+  "method": "git diff main...feature/agents-toolkit --stat; immutable source inspection",
+  "observed": {
+    "commits_ahead": 8,
+    "changed_files": 24,
+    "java_source_changed": false,
+    "constraint_csv_changed": false,
+    "population_csv_changed": false,
+    "manifest_agents": 500,
+    "manifest_profiles": 302
+  },
+  "limitations": "Source and committed manifest observation only; not a new model run or proof of real-world attribute semantics.",
+  "review": "pending"
+}

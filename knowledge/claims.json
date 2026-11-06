@@ -1,0 +1,96 @@
+[
+  {
+    "id": "CL-001",
+    "class": "observation",
+    "statement": "The toolkit branch adds Python agent tools without changing Java sources or input population CSV.",
+    "applicability": "Toolkit baseline only",
+    "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+    "branch": "feature/agents-toolkit",
+    "implementation_revision": "6a858cb5e5a3fef119fd3153af8f1be917abbf2b",
+    "paths": [
+      "tools/build_agents.py",
+      "tools/chat_agent.py",
+      "src/",
+      "population.csv"
+    ],
+    "evidence": [
+      "knowledge/evidence/baseline.json"
+    ],
+    "validation_scope": "Immutable Git diff/source and committed manifest inspection only.",
+    "limitations": "Fixed baseline only; no claim about later commits.",
+    "status": "proposed",
+    "supersedes": [],
+    "review": "pending"
+  },
+  {
+    "id": "CL-002",
+    "class": "observation",
+    "statement": "The committed agent manifest reports 500 identities and 302 base profiles.",
+    "applicability": "Toolkit baseline only",
+    "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+    "branch": "feature/agents-toolkit",
+    "implementation_revision": "6a858cb5e5a3fef119fd3153af8f1be917abbf2b",
+    "paths": [
+      "agents/manifest.json"
+    ],
+    "evidence": [
+      "knowledge/evidence/baseline.json"
+    ],
+    "validation_scope": "Immutable Git diff/source and committed manifest inspection only.",
+    "limitations": "Manifest observation; identities do not imply independent population profiles.",
+    "status": "proposed",
+    "supersedes": [],
+    "review": "pending"
+  },
+  {
+    "id": "CL-003",
+    "class": "interpretation",
+    "statement": "Real-world attribute labels are assumptions and cannot validate survey realism.",
+    "applicability": "Toolkit baseline only",
+    "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+    "branch": "feature/agents-toolkit",
+    "implementation_revision": "6a858cb5e5a3fef119fd3153af8f1be917abbf2b",
+    "paths": [
+      "tools/agent_labels.fr.json",
+      "README_AGENTS.md"
+    ],
+    "evidence": [
+      "knowledge/evidence/baseline.json"
+    ],
+    "validation_scope": "Immutable Git diff/source and committed manifest inspection only.",
+    "limitations": "Interpretation awaiting human review; original semantics are unavailable.",
+    "status": "proposed",
+    "supersedes": [],
+    "review": "pending"
+  },
+  {
+    "id": "CL-004",
+    "class": "observation",
+    "statement": "The local shared knowledge client passed 25 new integration tests and all 55 existing tests; its finite protocol model passed with three failing negative controls.",
+    "applicability": "Local Windows Python 3.12.7 implementation validation only",
+    "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+    "branch": "codex/team-knowledge-service",
+    "implementation_revision": "b6c040a7c22ee887a891ec93769cdeb2c9b9f755",
+    "paths": [
+      ".github/workflows/knowledge.yml",
+      ".gitignore",
+      "AGENTS.md",
+      "docs/knowledge-client.md",
+      "knowledgekit/__init__.py",
+      "knowledgekit/__main__.py",
+      "knowledgekit/hosts.py",
+      "knowledgekit/service.py",
+      "knowledgekit/source.py",
+      "tests/test_knowledge.py",
+      "tools/check_knowledge_model.py"
+    ],
+    "evidence": [
+      "knowledge/evidence/implementation.json"
+    ],
+    "validation_scope": "Local isolated repositories, synthetic data and mocked real-provider transport hook; no live LLM or remote CI run.",
+    "limitations": "Human semantic review and project-origin publication are pending.",
+    "status": "verified",
+    "supersedes": [],
+    "review": "pending"
+  }
+]

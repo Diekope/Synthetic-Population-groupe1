@@ -1,0 +1,70 @@
+{
+  "id": "EV-KNOWLEDGE-001",
+  "date": "2026-11-06",
+  "class": "observation",
+  "repository": "https://github.com/Diekope/Synthetic-Population-groupe1",
+  "branch": "codex/team-knowledge-service",
+  "implementation_revision": "b6c040a7c22ee887a891ec93769cdeb2c9b9f755",
+  "execution_snapshot": {
+    "base_revision": "6a858cb5e5a3fef119fd3153af8f1be917abbf2b",
+    "changed_paths": [
+      ".github/workflows/knowledge.yml",
+      ".gitignore",
+      "AGENTS.md",
+      "docs/knowledge-client.md",
+      "knowledgekit/__init__.py",
+      "knowledgekit/__main__.py",
+      "knowledgekit/hosts.py",
+      "knowledgekit/service.py",
+      "knowledgekit/source.py",
+      "tests/test_knowledge.py",
+      "tools/check_knowledge_model.py"
+    ],
+    "state": "Tests ran before commit; no source changes between test completion and commit. Post-commit worktree was clean."
+  },
+  "environment": {
+    "os": "Windows",
+    "python": "3.12.7",
+    "PYTHONUTF8": "1",
+    "network": "isolated local bare Git remotes; mocked LLM transport; existing GUI loopback tests"
+  },
+  "checks": [
+    {
+      "command": "python -m unittest discover -s tests -v",
+      "exit_code": 0,
+      "tests": 80,
+      "existing_tests": 55,
+      "new_tests": 25,
+      "seconds": 124.303
+    },
+    {
+      "command": "python tools/check_knowledge_model.py",
+      "exit_code": 0,
+      "states": 161,
+      "transitions": 2371,
+      "negative_controls": {
+        "gate": [
+          "gated_action"
+        ],
+        "publish": [
+          "durable_attempt"
+        ],
+        "completion": [
+          "complete_required_update"
+        ]
+      }
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit_code": 0
+    }
+  ],
+  "limitations": [
+    "No live model request or deployed service was verified.",
+    "Model invariant checking covers only its finite abstraction, not correspondence with Python.",
+    "GitHub Actions workflows were added but not run remotely.",
+    "Project-origin publication remains pending authorization.",
+    "Existing population-agent --check platform limitations are outside this implementation scope."
+  ],
+  "semantic_review": "pending"
+}

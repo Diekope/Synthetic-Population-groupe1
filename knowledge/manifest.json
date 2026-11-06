@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "documents": [
+    {
+      "id": "TK-ENTRY",
+      "path": "knowledge/index.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "mandatory"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "TK-STATUS",
+      "path": "knowledge/status.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "status"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-ARCH",
+      "path": "knowledge/architecture.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "architecture"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-SOURCES",
+      "path": "knowledge/sources.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "source"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-DECISIONS",
+      "path": "knowledge/decisions.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "decision"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-POLICY",
+      "path": "knowledge/policy.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "policy",
+        "mandatory"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "TK-WORKFLOW",
+      "path": "knowledge/workflow.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "workflow"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-AGENTS",
+      "path": "knowledge/agents.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "agent"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-PROTOCOL",
+      "path": "knowledge/protocol.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "protocol",
+        "mandatory"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "TK-VALIDATION",
+      "path": "knowledge/validation.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "validation"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-ACCEPTANCE",
+      "path": "knowledge/acceptance.md",
+      "status": "proposed",
+      "scope": [
+        "project",
+        "validation"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-TPL-PROPOSAL",
+      "path": "knowledge/templates/proposal.md",
+      "status": "proposed",
+      "scope": [
+        "template"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-TPL-CLAIM",
+      "path": "knowledge/templates/claim.md",
+      "status": "proposed",
+      "scope": [
+        "template"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-TPL-EVIDENCE",
+      "path": "knowledge/templates/evidence.md",
+      "status": "proposed",
+      "scope": [
+        "template"
+      ],
+      "mandatory": false
+    },
+    {
+      "id": "TK-TPL-HANDOFF",
+      "path": "knowledge/templates/handoff.md",
+      "status": "proposed",
+      "scope": [
+        "template"
+      ],
+      "mandatory": false
+    }
+  ]
+}
