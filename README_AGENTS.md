@@ -306,8 +306,8 @@ Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
 - l'Atlas anime les positions du run sans les téléporter : chaque bille ne
   parcourt qu'une **fraction** du chemin à chaque rafraîchissement (~2,4 s de
   constante), les agents qui viennent de converser font un **petit saut**, et
-  toutes les billes gardent une **légère dérive** dans leur zone — jamais
-  d'arrêt complet ;
+  toutes les billes **continuent leurs sauts aléatoires** par-dessus — le tri
+  ou le tick suivant ne fige jamais l'essaim ;
 
 Avec 500 agents, `Conv./tick = 4` et une vitesse `max`, un run de 200 ticks
 produit des centaines de conversations en quelques secondes (mode mock). Avec un

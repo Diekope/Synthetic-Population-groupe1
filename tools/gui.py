@@ -1753,56 +1753,50 @@ function stepAtlas(dt, t){
     const i = L.dx.indexOf(a.attributes[L.xa]);
     const j = L.dy.indexOf(a.attributes[L.ya]);
     const target = active && match.has(a.id) && i >= 0 && j >= 0;
+    let gx = null, gy = null;
     if (target){
-      // Filtre actif : l'agent rejoint sa cellule et s'y pose (nuage lisible).
-      const tx = clamp((L.px(i) - L.pad.l) / L.iw + m.ox * 1.7, .02, .98);
-      const ty = clamp((L.py(j) - L.pad.t) / L.ih + m.oy * 1.7, .02, .98);
-      m.vx += (tx - m.x) * 10 * dt;
-      m.vy += (ty - m.y) * 10 * dt;
-      const damp = Math.exp(-3.2 * dt);
-      m.vx *= damp; m.vy *= damp;
-      m.state = "idle"; m.hopVz = 0; m.hopZ *= Math.exp(-6 * dt);
+      // Filtre actif : l'agent rejoint sa cellule (nuage lisible) en sautant.
+      gx = clamp((L.px(i) - L.pad.l) / L.iw + m.ox * 1.7, .02, .98);
+      gy = clamp((L.py(j) - L.pad.t) / L.ih + m.oy * 1.7, .02, .98);
     } else if (m.tx != null){
-      // Position issue du run : on n'y va que partiellement à chaque
-      // rafraîchissement (~2,4 s) pour voir l'évolution pas à pas.
-      const k = 1 - Math.exp(-dt / 2.4);
-      m.x += (m.tx - m.x) * k;
-      m.y += (m.ty - m.y) * k;
-      // Légère dérive permanente dans la zone : jamais d'arrêt complet.
-      const wob = 0.007;
-      m.x += Math.sin(t * 0.7 + m.phase) * wob * dt;
-      m.y += Math.cos(t * 0.6 + m.phase * 1.3) * wob * dt;
-      m.vx = Math.sin(t * 0.7 + m.phase) * wob * 2;
-      m.vy = Math.cos(t * 0.6 + m.phase * 1.3) * wob * 2;
-      // Petit saut quand l'agent vient de converser.
-      if (m.hopZ > 0 || m.hopVz > 0){
-        m.hopVz -= 3.4 * dt;
-        m.hopZ += m.hopVz * dt;
-        if (m.hopZ <= 0){ m.hopZ = 0; m.hopVz = 0; }
-      }
-      m.state = "idle";
-      m.timer = Math.max(m.timer, 1.5);
-    } else if (m.state === "jump"){
-      // En l'air : petite trajectoire balistique.
+      // Position issue du run : on n'y va que partiellement pour voir
+      // l'évolution petit à petit, sans interrompre les sauts.
+      gx = m.tx; gy = m.ty;
+    }
+
+    // Saut ambiant : les agents sautent en continu, même pendant un tri.
+    if (m.hopZ > 0 || m.hopVz > 0){
       m.hopVz -= 3.4 * dt;
       m.hopZ += m.hopVz * dt;
-      if (m.hopZ <= 0){
-        m.hopZ = 0; m.hopVz = 0; m.vx = 0; m.vy = 0;
+      if (m.hopZ <= 0){ m.hopZ = 0; m.hopVz = 0; }
+    }
+    if (m.state === "jump"){
+      // En l'air : petite trajectoire balistique.
+      if (m.hopZ <= 0 && m.hopVz <= 0){
+        m.vx = 0; m.vy = 0;
         m.state = "idle";
         m.timer = 2.0 + rnd(a.id * 3.7 + Math.floor(t * 7)) * 6.5;  // longue pause
       }
     } else {
       // Au sol : immobile, sauf quand le minuteur déclenche un saut.
-      m.hopZ *= Math.exp(-8 * dt);
       m.timer -= dt;
       if (m.timer <= 0){
         const ang = rnd(a.id * 7.1 + t * 41.3) * Math.PI * 2;
         const sp = 0.035 + rnd(a.id * 4.9 + t * 23.1) * 0.055;
         m.state = "jump";
-        m.hopVz = 0.30 + rnd(a.id * 2.3 + t * 17.7) * 0.35;
+        m.hopVz = Math.max(m.hopVz, 0.30 + rnd(a.id * 2.3 + t * 17.7) * 0.35);
         m.vx = Math.cos(ang) * sp; m.vy = Math.sin(ang) * sp;
       }
     }
+
+    // Rejoint sa cible par petites touches : le tri ou le tick suivant ne
+    // téléporte jamais la bille, et les sauts continuent par-dessus.
+    if (gx != null){
+      const k = 1 - Math.exp(-dt / (target ? 0.55 : 2.4));
+      m.x += (gx - m.x) * k;
+      m.y += (gy - m.y) * k;
+    }
+
     m.x += m.vx * dt; m.y += m.vy * dt;
     if (m.x < .02){ m.x = .02; m.vx = Math.abs(m.vx) * .5; }
     if (m.x > .98){ m.x = .98; m.vx = -Math.abs(m.vx) * .5; }
