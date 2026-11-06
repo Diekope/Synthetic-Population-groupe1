@@ -278,20 +278,16 @@ forte). La légende sous l'Atlas rappelle ces symboles.
 Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
 `social_sim.py` en mode mock, Ollama ou OpenAI :
 
-- champs `Ticks`, `Vitesse`, `Spark`, `Groupes`, `Refus`, `Conv./tick`,
-  `Parallèle`, `Agents`, `Run` ;
+- champs `Ticks`, `Vitesse`, `Conv./tick`, `Parallèle`, `Agents`, `Run` ;
 - `Agents` vide = **toute la population** (500 agents) ; une valeur limite le run
   aux N premiers agents ;
 - `Vitesse` règle l'intervalle entre deux ticks : `max` (aucune pause, le plus
   rapide possible), `rapide`, `normale`, `lente`, `très lente` ;
 - `Conv./tick` et `Parallèle` augmentent le débit : 4 et 4 par défaut, soit
   jusqu'à 16 conversations par tick, générées 4 par 4 ;
-- `Spark` : probabilité qu'un slot de conversation se déclenche à chaque tick
-  (`0` = aucun échange, `1` = un échange par slot) ;
-- `Groupes` : probabilité qu'un déclenchement devienne une conversation de
-  groupe existant plutôt qu'une conversation à deux ;
-- `Refus` : probabilité de base qu'un agent invité refuse de discuter, modulée
-  par l'affinité et le dernier échange ;
+- les taux sociaux sont **figés côté GUI** : `Spark = 0,5`, `Groupes = 0,35`,
+  `Refus = 0,1` ; ils restent réglables en ligne de commande
+  (`--spark-rate`, `--group-rate`, `--refusal-rate`) ;
 - `Pause` / `Reprendre` suspend et relance le sous-processus sans perdre son
   état (les ticks s'arrêtent puis repartent au même point) ;
 - `Démarrer` / `Arrêter`, état `en cours` / `terminée`, statistiques et flux des
@@ -307,9 +303,11 @@ Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
   `Exporter` (télécharge son `state.json`) ;
 - `state.json` est écrit à chaque tick (`--state-every 1`) : affinités, groupes,
   opinions et positions sont rechargés automatiquement toutes les secondes ;
-- l'Atlas replace les billes aux positions réelles du run **en les animant**
-  (interpolation douce) plutôt qu'en les téléportant à chaque rafraîchissement,
-  et les anneaux de groupe et panneaux se mettent à jour en direct.
+- l'Atlas anime les positions du run sans les téléporter : chaque bille ne
+  parcourt qu'une **fraction** du chemin à chaque rafraîchissement (~2,4 s de
+  constante), les agents qui viennent de converser font un **petit saut**, et
+  toutes les billes gardent une **légère dérive** dans leur zone — jamais
+  d'arrêt complet ;
 
 Avec 500 agents, `Conv./tick = 4` et une vitesse `max`, un run de 200 ticks
 produit des centaines de conversations en quelques secondes (mode mock). Avec un

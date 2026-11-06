@@ -54,6 +54,11 @@ MODEL_SUGGESTIONS = [
     "phi3:mini",
 ]
 
+# Paramètres sociaux figés pour la GUI : plus besoin de les exposer.
+SPARK_RATE = 0.5
+GROUP_RATE = 0.35
+REFUSAL_RATE = 0.1
+
 
 class State:
     def __init__(self, agents_path: Path, surveys_dir: Path | None = None,
@@ -302,6 +307,11 @@ class State:
                 continue
             topic = raw.get("topic") or {}
             group = raw.get("group") or {}
+            if raw.get("type") == "refusal":
+                ids = [x.get("id") for x in (raw.get("refuser"),
+                                             raw.get("invited_by")) if x]
+            else:
+                ids = [p.get("id") for p in raw.get("participants") or []]
             events.append({
                 "type": raw.get("type"),
                 "tick": raw.get("tick"),
@@ -309,6 +319,7 @@ class State:
                 "mode": raw.get("mode"),
                 "topic": topic.get("text"),
                 "names": [p.get("name") for p in raw.get("participants") or []],
+                "ids": ids,
                 "group": group.get("id"),
                 "affinity_before": raw.get("affinity_before"),
                 "affinity_after": raw.get("affinity_after"),
@@ -379,9 +390,9 @@ class State:
                 max_ticks = max(1, min(5000, int(body.get("max_ticks") or 20)))
                 tick_seconds = max(0.0, min(60.0,
                                             float(body.get("tick_seconds", 0.5))))
-                spark = max(0.0, min(1.0, float(body.get("spark_rate", 0.5))))
-                group_rate = max(0.0, min(1.0, float(body.get("group_rate", 0.35))))
-                refusal = max(0.0, min(1.0, float(body.get("refusal_rate", 0.1))))
+                spark = max(0.0, min(1.0, float(body.get("spark_rate", SPARK_RATE))))
+                group_rate = max(0.0, min(1.0, float(body.get("group_rate", GROUP_RATE))))
+                refusal = max(0.0, min(1.0, float(body.get("refusal_rate", REFUSAL_RATE))))
                 burst = max(1, min(64, int(body.get("conversations_per_tick") or 1)))
                 parallel = max(1, min(32, int(body.get("parallel") or 1)))
                 limit = body.get("limit")
@@ -1114,9 +1125,6 @@ INDEX = r"""<!doctype html>
           <option value="0.3">lente</option>
           <option value="1">très lente</option>
         </select></label>
-        <label>Spark <input id="simspark" type="number" value="0.5" min="0" max="1" step="0.05"></label>
-        <label>Groupes <input id="simgroup" type="number" value="0.35" min="0" max="1" step="0.05"></label>
-        <label>Refus <input id="simrefusal" type="number" value="0.1" min="0" max="1" step="0.05"></label>
         <label>Conv./tick <input id="simburst" type="number" value="4" min="1" max="64"></label>
         <label>Parallèle <input id="simpar" type="number" value="4" min="1" max="32"></label>
         <label>Agents <input id="simlimit" type="number" value="" min="2" max="500" placeholder="tous"></label>
@@ -1755,14 +1763,25 @@ function stepAtlas(dt, t){
       m.vx *= damp; m.vy *= damp;
       m.state = "idle"; m.hopVz = 0; m.hopZ *= Math.exp(-6 * dt);
     } else if (m.tx != null){
-      // Position issue du run : on rejoint la cible en douceur au lieu de
-      // téléporter la bille à chaque rafraîchissement de l'état.
-      const k = 1 - Math.exp(-dt / 0.35);
-      const dx = m.tx - m.x, dy = m.ty - m.y;
-      m.x += dx * k; m.y += dy * k;
-      m.vx = dx * 0.25; m.vy = dy * 0.25;   // orientation des yeux
-      m.state = "idle"; m.hopVz = 0; m.hopZ *= Math.exp(-6 * dt);
-      m.timer = Math.max(m.timer, 1.5);      // pas de saut pendant le suivi
+      // Position issue du run : on n'y va que partiellement à chaque
+      // rafraîchissement (~2,4 s) pour voir l'évolution pas à pas.
+      const k = 1 - Math.exp(-dt / 2.4);
+      m.x += (m.tx - m.x) * k;
+      m.y += (m.ty - m.y) * k;
+      // Légère dérive permanente dans la zone : jamais d'arrêt complet.
+      const wob = 0.007;
+      m.x += Math.sin(t * 0.7 + m.phase) * wob * dt;
+      m.y += Math.cos(t * 0.6 + m.phase * 1.3) * wob * dt;
+      m.vx = Math.sin(t * 0.7 + m.phase) * wob * 2;
+      m.vy = Math.cos(t * 0.6 + m.phase * 1.3) * wob * 2;
+      // Petit saut quand l'agent vient de converser.
+      if (m.hopZ > 0 || m.hopVz > 0){
+        m.hopVz -= 3.4 * dt;
+        m.hopZ += m.hopVz * dt;
+        if (m.hopZ <= 0){ m.hopZ = 0; m.hopVz = 0; }
+      }
+      m.state = "idle";
+      m.timer = Math.max(m.timer, 1.5);
     } else if (m.state === "jump"){
       // En l'air : petite trajectoire balistique.
       m.hopVz -= 3.4 * dt;
@@ -2192,6 +2211,7 @@ async function health(){
 }
 
 let SIM_POLL = 0;
+let LAST_SIM_TICK = -1;
 
 function simBody(){
   return {
@@ -2199,9 +2219,6 @@ function simBody(){
     model: $("#model").value,
     max_ticks: +$("#simticks").value || 200,
     tick_seconds: +$("#simspeed").value || 0,
-    spark_rate: +$("#simspark").value,
-    group_rate: +$("#simgroup").value,
-    refusal_rate: +$("#simrefusal").value,
     conversations_per_tick: +$("#simburst").value || 1,
     parallel: +$("#simpar").value || 1,
     limit: +$("#simlimit").value || null,
@@ -2269,6 +2286,18 @@ function applySimState(p){
       }
     }
   }
+  // Les agents qui viennent de converser font un petit saut visible.
+  if (typeof p.tick === "number" && p.tick > LAST_SIM_TICK){
+    for (const ev of (p.events || [])){
+      const tick = Number(ev.tick);
+      if (!(tick > LAST_SIM_TICK && tick <= p.tick)) continue;
+      for (const id of (ev.ids || [])){
+        const m = MOTION.get(Number(id));
+        if (m) m.hopVz = Math.max(m.hopVz || 0, 0.34);
+      }
+    }
+    LAST_SIM_TICK = p.tick;
+  }
   renderAffinityStatus();
   if (S.sel){ renderAffinity(S.sel); renderGroup(S.sel); renderOpinions(S.sel); }
   if (!ATLAS_RAF) drawAtlasFrame(ATLAS_T);
@@ -2329,7 +2358,8 @@ async function simReset(){
   btn.disabled = true;
   try {
     const p = await simPost("/api/sim/reset", {});
-    for (const m of MOTION.values()){ m.tx = null; m.ty = null; }
+    for (const m of MOTION.values()){ m.tx = null; m.ty = null; m.hopZ = 0; m.hopVz = 0; }
+    LAST_SIM_TICK = -1;
     if (S.meta){
       S.meta.affinity = p.affinity || {};
       S.meta.groups = p.groups || {};
@@ -2404,7 +2434,8 @@ async function simDelete(){
         S.meta.affinity_source.includes("/" + id + "/")){
       const p = await simPost("/api/sim/reset", {});
       applySimState({run_id: null});
-      for (const m of MOTION.values()){ m.tx = null; m.ty = null; }
+      for (const m of MOTION.values()){ m.tx = null; m.ty = null; m.hopZ = 0; m.hopVz = 0; }
+      LAST_SIM_TICK = -1;
       renderSim({running: false, run_id: null, tick: 0, stats: {},
                  memory_pairs: 0, events: [], error: null});
       if (S.meta){
