@@ -289,9 +289,11 @@ class GuiTest(unittest.TestCase):
         for control in ('id="simstart"', 'id="simstop"', 'id="simticks"',
                         'id="simspeed"', 'id="simlimit"', 'id="simfresh"',
                         'id="simreset"', 'id="simburst"', 'id="simpar"',
+                        'id="simpause"',
                         'id="simruns"', 'id="simload"', 'id="simresume"',
                         'id="simdelete"', 'id="simexport"',
-                        "/api/sim/start", "/api/sim/reset", "/api/runs/delete"):
+                        "/api/sim/start", "/api/sim/reset", "/api/runs/delete",
+                        "/api/sim/pause", "/api/sim/resume"):
             self.assertIn(control, html)
         self.assertIn('placeholder="tous"', html)
 
@@ -346,6 +348,36 @@ class GuiTest(unittest.TestCase):
                 time.sleep(0.2)
             self.assertFalse(state["running"])
             self.assertEqual(len(state["positions"]), 500)
+        finally:
+            self._post("/api/sim/stop", {})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_sim_pause_and_resume(self):
+        run_id = "unittest-gui-pause"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            status, data = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 5000,
+                "tick_seconds": 0.05, "spark_rate": 1, "group_rate": 0,
+                "refusal_rate": 0, "limit": 6, "run_id": run_id,
+                "reset": True,
+            })
+            self.assertEqual(status, 200, data)
+            time.sleep(0.3)
+            status, paused = self._post("/api/sim/pause", {})
+            self.assertEqual(status, 200, paused)
+            self.assertTrue(paused["running"])
+            self.assertTrue(paused["paused"])
+            time.sleep(0.3)
+            still = self._get("/api/sim/status")
+            self.assertTrue(still["paused"])
+            status, resumed = self._post("/api/sim/resume", {})
+            self.assertEqual(status, 200, resumed)
+            self.assertFalse(resumed["paused"])
+            self.assertTrue(resumed["running"])
+            status, stopped = self._post("/api/sim/stop", {})
+            self.assertFalse(stopped["running"])
+            self.assertFalse(stopped["paused"])
         finally:
             self._post("/api/sim/stop", {})
             shutil.rmtree(run_dir, ignore_errors=True)

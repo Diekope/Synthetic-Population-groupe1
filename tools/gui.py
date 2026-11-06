@@ -25,6 +25,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -74,6 +75,7 @@ class State:
         self.sim_run_dir: Path | None = None
         self.sim_error: str | None = None
         self.sim_config: dict = {}
+        self.sim_paused = False
         self.topic_labels = self._load_topic_labels()
         self.attrs = [a for a in self.agents[0]["attributes"] if a.startswith("A")]
         self.domains = {a: sorted({ag["attributes"][a] for ag in self.agents}) for a in self.attrs}
@@ -342,8 +344,11 @@ class State:
                 self._sim_close_log()
 
             memory_pairs = len((data or {}).get("memory") or {})
+            if not running:
+                self.sim_paused = False
             return {
                 "running": running,
+                "paused": bool(running and self.sim_paused),
                 "run_id": self.sim_run_id,
                 "run_dir": str(self.sim_run_dir) if self.sim_run_dir else None,
                 "tick": self.social_tick,
@@ -429,6 +434,7 @@ class State:
             self.sim_run_id = safe
             self.sim_run_dir = run_dir
             self.sim_error = None
+            self.sim_paused = False
             self.sim_config = {
                 "provider": provider, "model": model, "max_ticks": max_ticks,
                 "tick_seconds": tick_seconds, "spark_rate": spark,
@@ -446,16 +452,50 @@ class State:
             self.affinity_source = None
             return self.sim_status()
 
+    def sim_pause(self) -> dict:
+        with self.sim_lock:
+            proc = self.sim_proc
+            if proc is None or proc.poll() is not None:
+                raise ValueError("aucune simulation en cours")
+            if not hasattr(signal, "SIGSTOP"):
+                raise ValueError("pause non disponible sur ce système")
+            if not self.sim_paused:
+                try:
+                    os.kill(proc.pid, signal.SIGSTOP)
+                except OSError as exc:
+                    raise ValueError(f"pause impossible : {exc}") from None
+                self.sim_paused = True
+            return self.sim_status()
+
+    def sim_resume(self) -> dict:
+        with self.sim_lock:
+            proc = self.sim_proc
+            if proc is None or proc.poll() is not None:
+                raise ValueError("aucune simulation en cours")
+            if self.sim_paused:
+                try:
+                    os.kill(proc.pid, signal.SIGCONT)
+                except OSError as exc:
+                    raise ValueError(f"reprise impossible : {exc}") from None
+                self.sim_paused = False
+            return self.sim_status()
+
     def sim_stop(self) -> dict:
         with self.sim_lock:
             proc = self.sim_proc
             if proc is not None and proc.poll() is None:
+                if self.sim_paused:
+                    try:
+                        os.kill(proc.pid, signal.SIGCONT)
+                    except OSError:
+                        pass
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait(timeout=2)
+            self.sim_paused = False
             return self.sim_status()
 
     def social_reset(self) -> dict:
@@ -477,6 +517,7 @@ class State:
             self.conversation_no = 0
             self.sim_run_id = None
             self.sim_run_dir = None
+            self.sim_paused = False
             self.sim_config = {}
             self.sim_error = None
             return {
@@ -536,6 +577,7 @@ class State:
             self.sim_run_id = run_dir.name
             self.sim_run_dir = run_dir
             self.sim_config = {}
+            self.sim_paused = False
             self.sim_error = None
             return self.sim_status()
 
@@ -766,13 +808,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path in ("/api/sim/start", "/api/sim/stop", "/api/sim/reset",
-                         "/api/sim/load", "/api/runs/delete"):
+                         "/api/sim/load", "/api/sim/pause", "/api/sim/resume",
+                         "/api/runs/delete"):
             try:
-                body = self._read_body() if not self.path.endswith("stop") else {}
+                needs_body = self.path.endswith(
+                    ("start", "reset", "load", "delete"))
+                body = self._read_body() if needs_body else {}
                 if self.path.endswith("start"):
                     payload = self.server.state.sim_start(body)
                 elif self.path.endswith("stop"):
                     payload = self.server.state.sim_stop()
+                elif self.path.endswith("pause"):
+                    payload = self.server.state.sim_pause()
+                elif self.path.endswith("resume"):
+                    payload = self.server.state.sim_resume()
                 elif self.path.endswith("reset"):
                     payload = self.server.state.social_reset()
                 elif self.path.endswith("load"):
@@ -1077,6 +1126,7 @@ INDEX = r"""<!doctype html>
       </div>
       <div class="simrow">
         <button class="btn" id="simstart">Démarrer</button>
+        <button class="btn ghost" id="simpause" disabled>Pause</button>
         <button class="btn ghost" id="simstop" disabled>Arrêter</button>
         <button class="btn ghost" id="simreset" title="efface l'état affiché (affinités, groupes, opinions)">Réinitialiser</button>
       </div>
@@ -2172,9 +2222,13 @@ async function simPost(path, body){
 
 function renderSim(p){
   const state = $("#simstate");
-  state.textContent = p.running ? "en cours" : (p.run_id ? "terminée" : "arrêtée");
+  const paused = !!p.paused;
+  state.textContent = paused ? "en pause"
+    : (p.running ? "en cours" : (p.run_id ? "terminée" : "arrêtée"));
   state.className = "badge" + (p.running ? " hot" : "");
   $("#simstart").disabled = !!p.running;
+  $("#simpause").disabled = !p.running;
+  $("#simpause").textContent = paused ? "Reprendre" : "Pause";
   $("#simstop").disabled = !p.running;
   const s = p.stats || {};
   $("#siminfo").textContent = p.run_id
@@ -2257,6 +2311,18 @@ async function simStop(){
 
 $("#simstart").onclick = simStart;
 $("#simstop").onclick = simStop;
+
+async function simPause(){
+  try {
+    const st = await fetch("/api/sim/status").then(r => r.json());
+    const path = st.paused ? "/api/sim/resume" : "/api/sim/pause";
+    const p = await simPost(path, {});
+    renderSim(p); applySimState(p); simPoll();
+  } catch (err){
+    $("#siminfo").textContent = "échec : " + err.message;
+  }
+}
+$("#simpause").onclick = simPause;
 
 async function simReset(){
   const btn = $("#simreset");

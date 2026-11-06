@@ -286,6 +286,14 @@ Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
   rapide possible), `rapide`, `normale`, `lente`, `très lente` ;
 - `Conv./tick` et `Parallèle` augmentent le débit : 4 et 4 par défaut, soit
   jusqu'à 16 conversations par tick, générées 4 par 4 ;
+- `Spark` : probabilité qu'un slot de conversation se déclenche à chaque tick
+  (`0` = aucun échange, `1` = un échange par slot) ;
+- `Groupes` : probabilité qu'un déclenchement devienne une conversation de
+  groupe existant plutôt qu'une conversation à deux ;
+- `Refus` : probabilité de base qu'un agent invité refuse de discuter, modulée
+  par l'affinité et le dernier échange ;
+- `Pause` / `Reprendre` suspend et relance le sous-processus sans perdre son
+  état (les ticks s'arrêtent puis repartent au même point) ;
 - `Démarrer` / `Arrêter`, état `en cours` / `terminée`, statistiques et flux des
   8 derniers événements ;
 - case `repartir de zéro` (cochée par défaut) : le run repart sans l'état, les
@@ -595,7 +603,7 @@ reste plus vague sur les chiffres.
 uv run python -m unittest discover -s tests -v
 ```
 
-124 tests couvrent :
+125 tests couvrent :
 
 - l'exactitude des marges après enrichissement ;
 - l'unicité des identités, des `stable_id` et des vecteurs d'attributs ;
@@ -623,7 +631,8 @@ uv run python -m unittest discover -s tests -v
 - le run sur toute la population par défaut (500 agents), le contrôle de vitesse
   et le débit (conversations par tick, génération parallèle) ;
 - la réinitialisation de l'état affiché depuis la GUI ;
-- la liste des runs, leur chargement, reprise, suppression et export.
+- la liste des runs, leur chargement, reprise, suppression et export ;
+- la pause et la reprise d'un run en cours.
 
 ---
 
