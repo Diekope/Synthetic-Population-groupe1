@@ -6,3 +6,4 @@ surveys/*.answers.jsonl
 surveys/*.report.json
 out/*.jsonl
 out/*.report.json
+social/runs/

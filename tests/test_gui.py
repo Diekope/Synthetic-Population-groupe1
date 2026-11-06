@@ -105,6 +105,196 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(m["labels"]["A1=v2"], "femme")
         self.assertIn("classe d'âge", m["labels"]["A9"])
 
+    def test_state_loads_social_affinity(self):
+        run = Path(self.tmp.name) / "social" / "runs" / "affinity-run"
+        run.mkdir(parents=True)
+        (run / "state.json").write_text(json.dumps({
+            "affinity": {"1:5": 0.73, "5:9": 0.2, "1:99999": 0.9,
+                         "7:7": 1.0},
+            "stats": {"conversations": 3, "refusals": 1},
+        }), encoding="utf-8")
+        state = gui.State(ROOT / "agents" / "agents.jsonl", self.surveys_dir,
+                          run / "state.json")
+        meta = state.meta()
+        self.assertEqual(meta["affinity"], {"1:5": 0.73, "5:9": 0.2})
+        self.assertTrue(meta["affinity_source"].endswith("state.json"))
+        self.assertEqual(meta["affinity_stats"]["refusals"], 1)
+        self.assertEqual(meta["affinity_default"], 0.5)
+
+    def test_state_finds_latest_affinity_run_by_default(self):
+        root = Path(self.tmp.name) / "auto"
+        (root / "agents").mkdir(parents=True)
+        shutil.copy(ROOT / "agents" / "agents.jsonl",
+                    root / "agents" / "agents.jsonl")
+        runs = root / "social" / "runs"
+        older = runs / "older-affinity"
+        newer = runs / "newer-affinity"
+        empty = runs / "newest-empty"
+        for p in (older, newer, empty):
+            p.mkdir(parents=True)
+        (older / "state.json").write_text(json.dumps(
+            {"affinity": {"1:5": 0.41}}), encoding="utf-8")
+        (newer / "state.json").write_text(json.dumps(
+            {"affinity": {"1:5": 0.72}}), encoding="utf-8")
+        (empty / "state.json").write_text(json.dumps(
+            {"stats": {"conversations": 0}}), encoding="utf-8")
+        import os
+        os.utime(older / "state.json", (100, 100))
+        os.utime(newer / "state.json", (200, 200))
+        os.utime(empty / "state.json", (300, 300))
+        state = gui.State(root / "agents" / "agents.jsonl", self.surveys_dir)
+        self.assertEqual(state.affinity, {"1:5": 0.72})
+        self.assertIn("newer-affinity", state.affinity_source)
+
+    def test_state_loads_social_groups(self):
+        run = Path(self.tmp.name) / "social" / "runs" / "group-run"
+        run.mkdir(parents=True)
+        (run / "state.json").write_text(json.dumps({
+            "affinity": {"1:5": 0.7},
+            "tick": 12,
+            "conversation_no": 9,
+            "opinions": {"1": {"teletravail": 0.72}, "99999": {"x": 0.9}},
+            "groups": {
+                "g001": {"members": [1, 5, 9], "cohesion": 0.66,
+                         "conversations": 2, "created_tick": 4},
+                "g002": {"members": [7, 99999], "cohesion": 0.4},
+            },
+        }), encoding="utf-8")
+        state = gui.State(ROOT / "agents" / "agents.jsonl", self.surveys_dir,
+                          run / "state.json")
+        meta = state.meta()
+        self.assertEqual(list(meta["groups"]), ["g001"])
+        self.assertEqual(meta["groups"]["g001"]["members"], [1, 5, 9])
+        self.assertEqual(meta["groups"]["g001"]["conversations"], 2)
+        self.assertEqual(meta["social_tick"], 12)
+        self.assertEqual(meta["conversation_no"], 9)
+        self.assertEqual(meta["opinions"], {"1": {"teletravail": 0.72}})
+
+    def test_social_reset_clears_displayed_state(self):
+        run = Path(self.tmp.name) / "social" / "runs" / "reset-run"
+        run.mkdir(parents=True)
+        (run / "state.json").write_text(json.dumps({
+            "affinity": {"1:5": 0.8},
+            "groups": {"g001": {"members": [1, 5, 9], "cohesion": 0.6}},
+            "opinions": {"1": {"teletravail": 0.7}},
+            "tick": 7, "conversation_no": 4,
+        }), encoding="utf-8")
+        state = gui.State(ROOT / "agents" / "agents.jsonl", self.surveys_dir,
+                          run / "state.json")
+        self.assertTrue(state.meta()["affinity"])
+        reset = state.social_reset()
+        self.assertEqual(reset["affinity"], {})
+        self.assertEqual(reset["groups"], {})
+        self.assertEqual(reset["opinions"], {})
+        meta = state.meta()
+        self.assertEqual(meta["affinity"], {})
+        self.assertEqual(meta["groups"], {})
+        self.assertEqual(meta["opinions"], {})
+        self.assertIsNone(meta["affinity_source"])
+        self.assertEqual(meta["social_tick"], 0)
+        self.assertEqual(meta["conversation_no"], 0)
+
+    def test_index_has_group_and_opinion_panels(self):
+        html = self._get("/", raw=True).decode()
+        for marker in ('id="group"', 'id="opinions"', "renderGroup",
+                       "renderOpinions", "groupColor"):
+            self.assertIn(marker, html)
+
+    def test_meta_exposes_topic_labels(self):
+        meta = self._get("/api/meta")
+        self.assertIn("teletravail", meta["topic_labels"])
+        self.assertIn("opinions", meta)
+
+    def test_index_has_affinity_hover(self):
+        html = self._get("/", raw=True).decode()
+        self.assertIn("affinité avec", html)
+        self.assertIn("renderAffinity", html)
+        self.assertIn('id="affinity"', html)
+        self.assertIn('id="affstat"', html)
+
+    def test_index_has_simulation_controls(self):
+        html = self._get("/", raw=True).decode()
+        for control in ('id="simstart"', 'id="simstop"', 'id="simticks"',
+                        'id="simspeed"', 'id="simlimit"', 'id="simfresh"',
+                        'id="simreset"', "/api/sim/start", "/api/sim/reset"):
+            self.assertIn(control, html)
+        self.assertIn('placeholder="tous"', html)
+
+    def test_sim_start_and_finish(self):
+        run_id = "unittest-gui-sim"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            status, data = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 3,
+                "tick_seconds": 0, "spark_rate": 1, "group_rate": 0,
+                "refusal_rate": 0, "limit": 6, "run_id": run_id,
+                "reset": True,
+            })
+            self.assertEqual(status, 200, data)
+            self.assertTrue(data["running"])
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                state = self._get("/api/sim/status")
+                if not state["running"]:
+                    break
+                time.sleep(0.2)
+            self.assertFalse(state["running"])
+            self.assertEqual(state["run_id"], run_id)
+            self.assertEqual(state["tick"], 3)
+            self.assertEqual(state["stats"]["conversations"], 3)
+            self.assertEqual(len(state["events"]), 3)
+            self.assertTrue(state["affinity"])
+            self.assertIsNone(state["error"])
+            meta = self._get("/api/meta")
+            self.assertEqual(meta["social_tick"], 3)
+            self.assertTrue(meta["affinity"])
+        finally:
+            self._post("/api/sim/stop", {})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_sim_runs_on_every_agent_by_default(self):
+        run_id = "unittest-gui-sim-all"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            status, data = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 2,
+                "tick_seconds": 0, "spark_rate": 0, "group_rate": 0,
+                "refusal_rate": 0, "run_id": run_id, "reset": True,
+            })
+            self.assertEqual(status, 200, data)
+            self.assertIsNone(data["config"]["limit"])
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                state = self._get("/api/sim/status")
+                if not state["running"]:
+                    break
+                time.sleep(0.2)
+            self.assertFalse(state["running"])
+            self.assertEqual(len(state["positions"]), 500)
+        finally:
+            self._post("/api/sim/stop", {})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_sim_stop_interrupts_a_long_run(self):
+        run_id = "unittest-gui-stop"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            status, data = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 5000,
+                "tick_seconds": 0.2, "spark_rate": 0.5, "group_rate": 0,
+                "refusal_rate": 0, "limit": 6, "run_id": run_id,
+                "reset": True,
+            })
+            self.assertEqual(status, 200, data)
+            time.sleep(0.5)
+            status, stopped = self._post("/api/sim/stop", {})
+            self.assertEqual(status, 200, stopped)
+            self.assertFalse(stopped["running"])
+            self.assertLess(stopped["tick"], 5000)
+        finally:
+            self._post("/api/sim/stop", {})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
     def test_chat_mock(self):
         agents = self._get("/api/agents")["agents"]
         status, data = self._post("/api/chat", {

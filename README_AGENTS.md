@@ -213,6 +213,7 @@ uv run python tools/gui.py                 # 127.0.0.1:8765
 uv run python tools/gui.py --open          # ouvre le navigateur
 uv run python tools/gui.py --port 9000 --agents agents/agents.jsonl
 uv run python tools/gui.py --port 0        # port libre choisi par l'OS
+uv run python tools/gui.py --social-state social/runs/gui-demo/state.json
 ```
 
 Si le port demandé est occupé, le serveur essaie automatiquement les 10 suivants
@@ -223,11 +224,12 @@ et affiche celui qu'il utilise.
 | Zone | Contenu |
 |---|---|
 | **Agents** | 500 lignes, recherche nom/clé/id, filtre `attribut = valeur` |
-| **Atlas** | essaim animé : chaque agent est une bille 3D avec de petits yeux clignotants, immobile la plupart du temps, qui saute de temps en temps vers un point aléatoire ; orange = profil dupliqué ; un filtre regroupe les agents dans leurs cellules X/Y ; clic = sélection |
+| **Atlas** | essaim animé : chaque agent est une bille 3D avec de petits yeux clignotants, immobile la plupart du temps, qui saute de temps en temps vers un point aléatoire ; orange = profil dupliqué ; un filtre regroupe les agents dans leurs cellules X/Y ; clic = sélection ; survol avec un agent sélectionné = affinité |
 | **Attributs** | distribution des 12 marges, avec les comptes exacts |
 | **Copies exactes** | profils partagés ×2 à ×N, membres du cluster cliquables |
 | **Sonder** | lance un questionnaire sur tout/partie des agents avec le modèle courant, suit la progression et affiche les résultats agrégés (barres + tableaux croisés) |
-| **Chat** | historique, latence, choix fournisseur/modèle |
+| **Chat** | historique, latence, choix fournisseur/modèle, affinités, groupe et opinions de l'agent |
+| **Simulation** | démarre/arrête un run social sur toute la population, ticks, vitesse, taux, flux d'événements en direct |
 
 La GUI écoute sur `127.0.0.1` par défaut, **sans authentification**. Ne l'expose
 pas sur un réseau public : elle peut appeler ton fournisseur LLM avec ta clé.
@@ -242,6 +244,60 @@ en pause. `animer` met le mouvement en pause ; `prefers-reduced-motion` désacti
 l'animation au chargement. La position dans la grille n'est donc **pas** une
 projection des 12 attributs : seuls X et Y comptent pour le regroupement, le
 profil complet reste dans le panneau de droite.
+
+### Affinité dans la GUI
+
+La GUI charge automatiquement le `state.json` social le plus récent qui contient
+des affinités (ou celui passé avec `--social-state`, fichier ou dossier de run).
+Aucune option n'est nécessaire : c'est actif par défaut. La barre de l'Atlas
+affiche le nombre de paires, de groupes et le run utilisé
+(`affinités · 45 paire(s) · 20 groupe(s) · gui-demo`).
+Sélectionne un agent dans la liste ou l'Atlas, puis survole un autre agent :
+l'infobulle affiche `affinité avec <agent> : 0,56 (bonne)` et un trait coloré
+relie les deux billes (rouge = faible, vert = forte). Le panneau de droite liste
+aussi les affinités enregistrées de l'agent sélectionné, avec des barres
+cliquables. Un anneau coloré signale les membres d'un groupe, et le panneau
+`Groupe` liste ses membres, sa cohésion et ses conversations. Le panneau
+`Opinions` montre les positions les plus marquées de l'agent sur les sujets
+déjà abordés. Une paire jamais observée vaut `0,5` (neutre).
+
+Les **cercles autour des billes** ont deux sens distincts :
+
+- **anneau coloré** (une couleur par groupe, dérivée de son identifiant) :
+  l'agent appartient à un groupe persistant ; tous les membres d'un même groupe
+  portent la même couleur ;
+- **anneau teal** (`#0f766e`) : c'est simplement l'agent **sélectionné**.
+
+La couleur de la **bille** indique autre chose : gris = profil unique, orange =
+profil dupliqué (plusieurs agents partagent les 12 mêmes attributs). Le trait
+pointillé entre deux billes, lui, code l'**affinité** (rouge faible → vert
+forte). La légende sous l'Atlas rappelle ces symboles.
+
+### Piloter une simulation depuis la GUI
+
+Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
+`social_sim.py` en mode mock, Ollama ou OpenAI :
+
+- champs `Ticks`, `Vitesse`, `Spark`, `Groupes`, `Refus`, `Agents`, `Run` ;
+- `Agents` vide = **toute la population** (500 agents) ; une valeur limite le run
+  aux N premiers agents ;
+- `Vitesse` règle l'intervalle entre deux ticks : `max` (aucune pause, le plus
+  rapide possible), `rapide`, `normale`, `lente`, `très lente` ;
+- `Démarrer` / `Arrêter`, état `en cours` / `terminée`, statistiques et flux des
+  8 derniers événements ;
+- case `repartir de zéro` (cochée par défaut) : le run repart sans l'état, les
+  journaux ni les transcripts précédents ; décoche-la pour réutiliser le même
+  dossier de run ;
+- bouton `Réinitialiser` : efface l'état **affiché** (affinités, groupes,
+  opinions, compteurs) sans rien supprimer sur disque ; il est refusé tant que
+  la simulation tourne ;
+- `state.json` est écrit à chaque tick (`--state-every 1`) : affinités, groupes,
+  opinions et positions sont rechargés automatiquement toutes les secondes ;
+- l'Atlas replace les billes aux positions réelles du run, les anneaux de groupe
+  et les panneaux se mettent à jour en direct.
+
+Avec 500 agents et une vitesse `max`, un run de 200 ticks dure quelques
+secondes. Pour que davantage d'agents conversent, augmente `Ticks` ou `Spark`.
 
 Le sélecteur de modèle liste les modèles Ollama installés avec leur taille ; les
 modèles d'embedding sont masqués.
@@ -531,7 +587,7 @@ reste plus vague sur les chiffres.
 uv run python -m unittest discover -s tests -v
 ```
 
-55 tests couvrent :
+119 tests couvrent :
 
 - l'exactitude des marges après enrichissement ;
 - l'unicité des identités, des `stable_id` et des vecteurs d'attributs ;
@@ -541,7 +597,23 @@ uv run python -m unittest discover -s tests -v
 - la sélection d'agent (id, clé, nom), le budget de contexte et les reprises sur erreur ;
 - l'API de la GUI (liste, méta, chat, chat en flux, sondage, erreurs) ;
 - la sélection et l'agrégation de la sonde, et l'appariement de fidélité ;
-- le CLI `--list` et le chat one-shot en mode mock.
+- le CLI `--list` et le chat one-shot en mode mock ;
+- la simulation sociale (sujets, positions 2D, proximité, déterminisme) ;
+- les conversations manuelles (sujet aléatoire, choisi ou libre) ;
+- les modèles par agent et l’affichage terminal (sujet, distance, logs) ;
+- les sessions distinctes par agent et la réception croisée des répliques ;
+- le refus probabiliste, visible, journalisé et actif même en paire forcée ;
+- l'affinité (sélection, refus, évolution, persistance dans `state.json`) ;
+- l'affinité dans la GUI (chargement, survol Atlas, panneau latéral) ;
+- les groupes persistants (formation, adhésion, départ, dissolution, cohésion) ;
+- les conversations collectives (une session par membre, tours alternés) ;
+- la persistance des groupes et la reprise `--resume` (état, logs conservés) ;
+- la remise à zéro `--reset` (état, journaux et transcripts effacés) ;
+- les opinions par sujet et leur convergence bornée ;
+- la mémoire par paire (sujets, redites, refus, persistance, reprise) ;
+- le lancement et l'arrêt d'une simulation depuis la GUI, en direct ;
+- le run sur toute la population par défaut (500 agents) et le contrôle de vitesse ;
+- la réinitialisation de l'état affiché depuis la GUI.
 
 ---
 
@@ -608,3 +680,263 @@ uv run python tools/build_agents.py constraint_cells.csv population.csv --check
 - **Environnement** : `pyproject.toml` fixe `requires-python >= 3.12` ; aucune
   dépendance pour la GUI, la CLI, la sonde et l'évaluation (stdlib seule).
 - **CI** : `.github/workflows/tests.yml` lance le `--check` puis les tests.
+
+---
+
+## 13. Simulation sociale — Phases A à F
+
+Le moteur `tools/social_sim.py` fait vivre les agents dans un espace 2D :
+chaque tick ils se déplacent légèrement, puis avec une probabilité
+`--spark-rate` deux agents proches discutent d'un sujet tiré dans
+`tools/topics.fr.json` (145 sujets, 19 catégories).
+
+```bash
+uv run python tools/social_sim.py --list-topics
+uv run python tools/social_sim.py --provider mock --limit 8 --max-ticks 5
+uv run python tools/social_sim.py --provider ollama --model llama3.2:3b \
+    --spark-rate 0.3 --tick-seconds 2 --max-ticks 50
+```
+
+- **Sélection spatiale** : un partenaire est d'autant plus probable qu'il est
+  proche (`exp(-distance / --distance-scale)`).
+- **Sujets** : tirage sans répétition dans une fenêtre récente ; `--list-topics`
+  affiche la liste et signale les sujets sensibles.
+- **Conversations** : 4 à 8 tours alternés, avec la persona de chaque agent et
+  le transcript courant. Les fournisseurs sont ceux de `chat_agent.py`.
+- **Sorties** : `config.json`, `events.jsonl`, `transcripts/<id>.json`,
+  `state.json` (positions, tick, statistiques) dans
+  `social/runs/<run-id>/`.
+
+### Conversation manuelle (Phase B)
+
+`--talk` fait discuter deux agents une seule fois. Les agents s'acceptent par
+id, clé d'identité, nom « Prénom Nom » ou `random` :
+
+```bash
+# Sujet aléatoire
+uv run python tools/social_sim.py --talk 12 47 --random-topic --turns 4
+
+# Sujet choisi dans la liste (id ou texte exact)
+uv run python tools/social_sim.py --talk 12 47 --topic teletravail
+
+# Sujet libre
+uv run python tools/social_sim.py --talk "Élise Garnier" "Louis Durand" \
+    --topic "faut-il interdire les trottinettes ?"
+```
+
+Le run est écrit dans `social/runs/manual-<horodatage>/` et l'événement porte
+`"mode": "manual"`. Sans `--turns`, le nombre de tours est tiré entre
+`--min-turns` et `--max-turns`.
+
+### Modèle par agent et logs terminal
+
+Par défaut `--provider mock` produit des réponses **factices mais lisibles**
+(préfixées `[mock]`), pour tester le pipeline sans réseau. Pour une vraie
+discussion, chaque tour est un appel séparé avec la persona de l'agent qui parle :
+
+```bash
+uv run python tools/social_sim.py --talk 12 47 --random-topic \
+    --provider ollama --model llama3.2:3b
+```
+
+Chaque agent dispose de **sa propre session** pendant la conversation : il ne
+reçoit que ses répliques en `assistant` et celles des autres en `user`. Aucune
+option n'est nécessaire, c'est le comportement par défaut. Les réponses du
+modèle s'affichent **en direct** dans le terminal ; `--no-stream` désactive ce
+flux (utile pour les logs ou les tests).
+
+Un modèle différent peut être associé à chaque agent :
+
+```bash
+uv run python tools/social_sim.py --talk 12 47 --topic teletravail \
+    --provider ollama --model llama3.2:3b \
+    --agent-model 12=qwen2.5:3b --agent-model 47=llama3.2:1b
+```
+
+Le terminal affiche le sujet, la catégorie, la distance, chaque prise de parole,
+puis les chemins des logs :
+
+```text
+[tick 1] c0001 · Zoé & Simon · sujet : le télétravail [travail] · distance 0.334
+  Zoé> ...
+  Simon> ...
+  ── fin · 2/2 tour(s) · sujet : le télétravail
+  logs        : social/runs/manual-.../events.jsonl
+  transcript  : social/runs/manual-.../transcripts/c0001.json
+```
+
+`--no-stream` coupe l'affichage des tokens en direct (hors `mock`).
+
+### Refus (Phase C)
+
+Un agent invité peut refuser de discuter. Le tirage a lieu **avant** le choix du
+sujet et **même quand la paire est imposée** (`--talk`, ou `--spark-rate 1`).
+Le refus est visible dans le terminal et journalisé ; aucun appel au modèle n'est
+fait et aucun transcript n'est écrit :
+
+```text
+[tick 1] c0001 · Zoé & Simon · distance 0.334
+  Simon> refuse de discuter avec Zoé (ne se sent pas concerné par le sujet)
+
+refus · Simon Blanc (ne se sent pas concerné par le sujet) · distance 0.3335
+```
+
+L'événement `events.jsonl` porte `"type": "refusal"`, le refusé (`refuser`),
+l'invitant (`invited_by`), la `reason`, l'affinité avant/après et
+`"transcript": []`. Le compteur `refusals` apparaît dans `state.json` et dans le
+bilan final. Le taux se règle avec `--refusal-rate` (défaut `0.1`, `0` pour
+désactiver) :
+
+```bash
+uv run python tools/social_sim.py --talk 12 47 --topic teletravail \
+    --refusal-rate 0.3
+```
+
+### Affinité (Phase D)
+
+Chaque paire d'agents a une affinité symétrique entre `0` (froide) et `1`
+(forte), initialisée à `0.5`. Elle agit à deux endroits :
+
+- **Choix du partenaire** : le poids de proximité est multiplié par
+  `0.25 + 1.5 × affinité`, donc un agent peu apprécié reste possible mais
+  beaucoup moins probable ;
+- **Refus** : la probabilité devient
+  `refusal_rate + (0.5 − affinité) × 0.4` (bornée à `0..1`). Une affinité basse
+  augmente les refus ; `--refusal-rate 0` les désactive quand même totalement.
+
+Après la conversation, l'affinité évolue selon une heuristique déterministe :
+conversation complétée et cordiale → hausse (jusqu'à `+0.08`), conversation
+interrompue ou conflictuelle → baisse (jusqu'à `-0.08`). Un refus coûte `-0.02`.
+Elle est persistée dans `state.json` :
+
+```json
+"affinity": {"1:5": 0.56}
+```
+
+Le terminal affiche l'affinité avant et après :
+
+```text
+[tick 1] c0001 · Charlie & Louis · sujet : ... · distance 0.286 · affinité 0.50
+  ── fin · 7/7 tour(s) · sujet : ... · affinité 0.50 → 0.51 (+0.01)
+```
+
+Les événements de conversation portent `affinity_before`, `affinity_after` et
+`affinity_delta`. Les agents se parlent donc encore après une baisse d'affinité,
+mais avec moins de chances.
+
+### Groupes persistants (Phase E)
+
+Les agents forment des groupes de `--group-min` à `--group-max` membres
+(défaut 3 à 5), par affinité mutuelle et proximité :
+
+- un groupe naît autour d'un agent libre dont les voisins proches
+  (`--group-radius`, défaut `0.25`) ont une affinité ≥ `--group-affinity`
+  (défaut `0.5`) ;
+- il admet ensuite des agents libres proches de son centre et bien liés à tous
+  ses membres, jusqu'à `--group-max` ;
+- un membre dont l'affinité moyenne avec le groupe passe sous
+  `group_affinity − 0.15` le quitte ; un groupe qui descend sous `group_min`
+  se dissout.
+
+La **cohésion** vaut `0.6 × affinité moyenne + 0.4 × proximité moyenne` et est
+mise à jour à chaque tick. Les groupes sont stables et écrits dans `state.json` :
+
+```json
+"groups": {
+  "g001": {"members": [1, 5, 12], "cohesion": 0.62,
+           "created_tick": 3, "last_active_tick": 18, "conversations": 2}
+}
+```
+
+À chaque tick, une conversation est collective avec la probabilité
+`--group-rate` (défaut `0.35`), sinon elle reste en tête-à-tête. Une
+conversation de groupe utilise **une session vierge par participant**, un tour
+par agent en round-robin, un sujet commun, et ajuste l'affinité de chaque paire.
+Le terminal et l'événement JSON portent `group_id`, `group.members`,
+`group.size` et `group.cohesion`.
+
+```bash
+uv run python tools/social_sim.py --max-groups 20 --group-rate 0.4
+uv run python tools/social_sim.py --group-min 3 --group-max 6 --group-radius 0.3
+```
+
+### Mémoire et opinions (Phase F)
+
+- **Mémoire par paire** : les `--memory-size` derniers sujets abordés
+  (défaut 5), la dernière humeur (`last_delta`), le nombre de conversations et
+  de refus. Un sujet déjà traité avec la même personne voit son poids multiplié
+  par `--repeat-penalty` (défaut `0.7`) ; la mémoire est rappelée dans le prompt
+  (`Mémoire : ...`) pour éviter les redites.
+- **Opinions par agent et par sujet** : `0` (opposé) à `1` (favorable),
+  initialisées de façon déterministe entre `0.15` et `0.85` selon
+  `(seed, agent, sujet)`. Après chaque conversation, chaque participant se
+  rapproche de la moyenne du groupe de
+  `--opinion-influence × (0.5 + 0.5 × affinité)` (défaut `0.15`), sans
+  dépasser les bornes.
+- **Effet sur l'affinité** : un désaccord d'opinion modère la hausse (jusqu'à
+  `±0.015`), l'accord l'amplifie.
+- **Effet sur le refus** : une dernière interaction négative augmente
+  légèrement la probabilité de refus (jusqu'à `+0.05`).
+- Tout est persisté dans `state.json` :
+
+```json
+"memory": {"1:5": {"topics": ["teletravail"], "conversations": 2,
+                   "refusals": 0, "last_delta": 0.04,
+                   "last_topic": "teletravail", "last_tick": 18}},
+"opinions": {"1": {"teletravail": 0.62}}
+```
+
+Les événements portent `agreement`, `opinions_before` et `opinions_after`.
+
+```bash
+uv run python tools/social_sim.py --memory-size 8 --opinion-influence 0.3
+uv run python tools/social_sim.py --repeat-penalty 0.3   # évite fortement les redites
+```
+
+### Reprise (`--resume`)
+
+`--resume` accepte un dossier de run ou un `state.json`. La reprise recharge
+positions, affinités, sujets récents, statistiques, tick, compteur de
+conversations et groupes ; `events.jsonl` est conservé et complété, pas tronqué.
+
+```bash
+uv run python tools/social_sim.py --run-id durable --max-ticks 20
+uv run python tools/social_sim.py --resume social/runs/durable --max-ticks 20
+```
+
+### Repartir de zéro (`--reset`)
+
+Un nouveau `--run-id` repart déjà de zéro : affinités à `0.5`, aucun groupe,
+compteurs à `0`, tick `0`. Pour effacer un run existant dans le même dossier
+(état, journaux, transcripts), ajoute `--reset` :
+
+```bash
+uv run python tools/social_sim.py --run-id durable --reset --max-ticks 20
+```
+
+`--reset` supprime `state.json`, `events.jsonl`, `config.json` et
+`transcripts/` avant de démarrer. Il est incompatible avec `--resume`.
+
+Pour ne pas former de groupes du tout : `--max-groups 0` (ou `--group-rate 0`
+pour garder des groupes sans conversations collectives).
+
+Vérifier un run :
+
+```bash
+# résumé lisible de l'état
+uv run python -c "import json;d=json.load(open('social/runs/durable/state.json'));print(d['tick'],d['stats'],len(d['affinity']),'paires',len(d['groups']),'groupes')"
+
+# nombre d'événements et de transcripts
+wc -l social/runs/durable/events.jsonl
+ls social/runs/durable/transcripts | wc -l
+
+# relancer la suite de tests
+uv run python -m unittest discover -s tests -q
+```
+
+Dans la GUI, la barre de l'Atlas et le panneau `Groupe` reflètent immédiatement
+le run chargé.
+
+Dans la GUI, les groupes apparaissent sous forme d'anneau coloré autour des
+agents et dans un panneau sous les affinités (membres cliquables, cohésion,
+nombre de conversations).
