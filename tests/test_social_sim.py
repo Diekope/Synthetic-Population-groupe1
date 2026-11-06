@@ -830,5 +830,35 @@ class SimulationTest(unittest.TestCase):
         self.assertEqual(writer.call_count, 4)  # 3 ticks + écriture finale
 
 
+    def test_conversations_per_tick_runs_a_burst(self):
+        sim = self.make(conversations_per_tick=4, max_ticks=1, group_rate=0.0)
+        stats = sim.run()
+        self.assertEqual(stats["conversations"], 4)
+        events = [json.loads(line) for line in
+                  sim.events_path.read_text(encoding="utf-8").splitlines() if line]
+        self.assertEqual([e["conversation_id"] for e in events],
+                         ["c0001", "c0002", "c0003", "c0004"])
+        self.assertEqual({e["tick"] for e in events}, {1})
+
+    def test_parallel_matches_sequential(self):
+        kwargs = dict(conversations_per_tick=3, max_ticks=6,
+                      group_rate=0.4, refusal_rate=0.15)
+        seq = self.make(out_dir=self.base / "seq", parallel=1, **kwargs)
+        par = self.make(out_dir=self.base / "par", parallel=4, **kwargs)
+        seq.run()
+        par.run()
+        self.assertEqual(seq.events_path.read_text(encoding="utf-8"),
+                         par.events_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            json.loads((seq.out_dir / "state.json").read_text(encoding="utf-8")),
+            json.loads((par.out_dir / "state.json").read_text(encoding="utf-8")))
+
+    def test_invalid_burst_or_parallel_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.make(conversations_per_tick=0)
+        with self.assertRaises(SystemExit):
+            self.make(parallel=0)
+
+
 if __name__ == "__main__":
     unittest.main()

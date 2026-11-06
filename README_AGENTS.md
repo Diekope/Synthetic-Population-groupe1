@@ -278,11 +278,14 @@ forte). La légende sous l'Atlas rappelle ces symboles.
 Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
 `social_sim.py` en mode mock, Ollama ou OpenAI :
 
-- champs `Ticks`, `Vitesse`, `Spark`, `Groupes`, `Refus`, `Agents`, `Run` ;
+- champs `Ticks`, `Vitesse`, `Spark`, `Groupes`, `Refus`, `Conv./tick`,
+  `Parallèle`, `Agents`, `Run` ;
 - `Agents` vide = **toute la population** (500 agents) ; une valeur limite le run
   aux N premiers agents ;
 - `Vitesse` règle l'intervalle entre deux ticks : `max` (aucune pause, le plus
   rapide possible), `rapide`, `normale`, `lente`, `très lente` ;
+- `Conv./tick` et `Parallèle` augmentent le débit : 4 et 4 par défaut, soit
+  jusqu'à 16 conversations par tick, générées 4 par 4 ;
 - `Démarrer` / `Arrêter`, état `en cours` / `terminée`, statistiques et flux des
   8 derniers événements ;
 - case `repartir de zéro` (cochée par défaut) : le run repart sans l'état, les
@@ -291,13 +294,18 @@ Le bloc `Simulation` (sous la liste des agents) lance un sous-processus
 - bouton `Réinitialiser` : efface l'état **affiché** (affinités, groupes,
   opinions, compteurs) sans rien supprimer sur disque ; il est refusé tant que
   la simulation tourne ;
+- liste `Runs` + `Charger` (affiche un run passé sans le relancer), `Reprendre`
+  (`--resume`, continue le run sélectionné), `Supprimer` (efface son dossier) et
+  `Exporter` (télécharge son `state.json`) ;
 - `state.json` est écrit à chaque tick (`--state-every 1`) : affinités, groupes,
   opinions et positions sont rechargés automatiquement toutes les secondes ;
-- l'Atlas replace les billes aux positions réelles du run, les anneaux de groupe
-  et les panneaux se mettent à jour en direct.
+- l'Atlas replace les billes aux positions réelles du run **en les animant**
+  (interpolation douce) plutôt qu'en les téléportant à chaque rafraîchissement,
+  et les anneaux de groupe et panneaux se mettent à jour en direct.
 
-Avec 500 agents et une vitesse `max`, un run de 200 ticks dure quelques
-secondes. Pour que davantage d'agents conversent, augmente `Ticks` ou `Spark`.
+Avec 500 agents, `Conv./tick = 4` et une vitesse `max`, un run de 200 ticks
+produit des centaines de conversations en quelques secondes (mode mock). Avec un
+modèle réel, `Parallèle` divise le temps d'attente des appels LLM.
 
 Le sélecteur de modèle liste les modèles Ollama installés avec leur taille ; les
 modèles d'embedding sont masqués.
@@ -587,7 +595,7 @@ reste plus vague sur les chiffres.
 uv run python -m unittest discover -s tests -v
 ```
 
-119 tests couvrent :
+124 tests couvrent :
 
 - l'exactitude des marges après enrichissement ;
 - l'unicité des identités, des `stable_id` et des vecteurs d'attributs ;
@@ -612,8 +620,10 @@ uv run python -m unittest discover -s tests -v
 - les opinions par sujet et leur convergence bornée ;
 - la mémoire par paire (sujets, redites, refus, persistance, reprise) ;
 - le lancement et l'arrêt d'une simulation depuis la GUI, en direct ;
-- le run sur toute la population par défaut (500 agents) et le contrôle de vitesse ;
-- la réinitialisation de l'état affiché depuis la GUI.
+- le run sur toute la population par défaut (500 agents), le contrôle de vitesse
+  et le débit (conversations par tick, génération parallèle) ;
+- la réinitialisation de l'état affiché depuis la GUI ;
+- la liste des runs, leur chargement, reprise, suppression et export.
 
 ---
 
@@ -690,11 +700,20 @@ chaque tick ils se déplacent légèrement, puis avec une probabilité
 `--spark-rate` deux agents proches discutent d'un sujet tiré dans
 `tools/topics.fr.json` (145 sujets, 19 catégories).
 
+Le **débit** se règle indépendamment du rythme d'affichage :
+
+- `--conversations-per-tick N` : jusqu'à N conversations par tick (défaut 1) ;
+- `--parallel N` : N conversations générées simultanément (défaut 1). Les
+  répliques sont produites en parallèle, mais les effets (affinité, opinions,
+  mémoire, journaux) sont appliqués séquentiellement : le résultat est
+  identique à un run séquentiel, à seed et paramètres égaux.
+
 ```bash
 uv run python tools/social_sim.py --list-topics
 uv run python tools/social_sim.py --provider mock --limit 8 --max-ticks 5
 uv run python tools/social_sim.py --provider ollama --model llama3.2:3b \
-    --spark-rate 0.3 --tick-seconds 2 --max-ticks 50
+    --spark-rate 0.3 --tick-seconds 2 --max-ticks 50 \
+    --conversations-per-tick 4 --parallel 4
 ```
 
 - **Sélection spatiale** : un partenaire est d'autant plus probable qu'il est

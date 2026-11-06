@@ -24,6 +24,7 @@ import errno
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -376,19 +377,24 @@ class State:
                 spark = max(0.0, min(1.0, float(body.get("spark_rate", 0.5))))
                 group_rate = max(0.0, min(1.0, float(body.get("group_rate", 0.35))))
                 refusal = max(0.0, min(1.0, float(body.get("refusal_rate", 0.1))))
+                burst = max(1, min(64, int(body.get("conversations_per_tick") or 1)))
+                parallel = max(1, min(32, int(body.get("parallel") or 1)))
                 limit = body.get("limit")
                 limit = max(2, min(len(self.agents), int(limit))) if limit else None
             except (TypeError, ValueError):
                 raise ValueError("paramètres numériques invalides") from None
 
             raw_id = str(body.get("run_id") or "").strip()
-            run_id = raw_id or time.strftime("gui-%Y%m%d-%H%M%S")
+            resume = str(body.get("resume") or "").strip()
+            run_id = resume or raw_id or time.strftime("gui-%Y%m%d-%H%M%S")
             safe = "".join(c if (c.isalnum() or c in "-_.") else "-"
                            for c in run_id)[:80]
             if not safe:
                 raise ValueError("identifiant de run invalide")
             runs_dir = self.root / "social" / "runs"
             run_dir = runs_dir / safe
+            if resume and not (run_dir / "state.json").exists():
+                raise ValueError(f"run à reprendre introuvable : {safe}")
             run_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
                 sys.executable, str(self.root / "tools" / "social_sim.py"),
@@ -400,13 +406,18 @@ class State:
                 "--spark-rate", str(spark),
                 "--group-rate", str(group_rate),
                 "--refusal-rate", str(refusal),
+                "--conversations-per-tick", str(burst),
+                "--parallel", str(parallel),
                 "--state-every", "1", "--no-stream", "--quiet",
             ]
             if limit:
                 cmd += ["--limit", str(limit)]
-            if body.get("reset", True):
+            if resume:
+                cmd += ["--resume", str(run_dir)]
+            elif body.get("reset", True):
                 cmd += ["--reset"]
-            log = (run_dir / "gui.log").open("w", encoding="utf-8")
+            log = (run_dir / "gui.log").open(
+                "a" if resume else "w", encoding="utf-8")
             try:
                 self.sim_proc = subprocess.Popen(
                     cmd, cwd=str(self.root), stdout=log,
@@ -422,7 +433,9 @@ class State:
                 "provider": provider, "model": model, "max_ticks": max_ticks,
                 "tick_seconds": tick_seconds, "spark_rate": spark,
                 "group_rate": group_rate, "refusal_rate": refusal,
+                "conversations_per_tick": burst, "parallel": parallel,
                 "limit": limit, "run_id": safe,
+                "resumed_from": safe if resume else None,
             }
             self.affinity_stats = {}
             self.social_tick = 0
@@ -475,6 +488,79 @@ class State:
                 "social_tick": 0,
                 "conversation_no": 0,
             }
+
+    def _run_dir(self, run_id: str) -> Path:
+        safe = "".join(c if (c.isalnum() or c in "-_.") else "-"
+                       for c in str(run_id))[:80]
+        if not safe:
+            raise ValueError("identifiant de run invalide")
+        return self.root / "social" / "runs" / safe
+
+    def run_list(self) -> dict:
+        runs_dir = self.root / "social" / "runs"
+        runs = []
+        for path in runs_dir.glob("*/state.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                mtime = path.stat().st_mtime
+            except (OSError, ValueError):
+                continue
+            stats = data.get("stats") or {}
+            runs.append({
+                "run_id": path.parent.name,
+                "tick": int(data.get("tick") or 0),
+                "conversations": int(stats.get("conversations") or 0),
+                "groups": len(data.get("groups") or {}),
+                "opinions": len(data.get("opinions") or {}),
+                "mtime": round(mtime, 3),
+            })
+        runs.sort(key=lambda r: r["mtime"], reverse=True)
+        return {"runs": runs}
+
+    def load_run(self, run_id: str) -> dict:
+        with self.sim_lock:
+            if self.sim_proc is not None and self.sim_proc.poll() is None:
+                raise ValueError("arrête la simulation avant de charger un run")
+            run_dir = self._run_dir(run_id)
+            state_path = run_dir / "state.json"
+            data = self._read_json(state_path)
+            if not data:
+                raise ValueError(f"aucun state.json dans {run_dir.name}")
+            self.affinity = self._normalise_affinity(data.get("affinity"))
+            self.groups = self._normalise_groups(data.get("groups"))
+            self.opinions = self._normalise_opinions(data.get("opinions"))
+            self.affinity_stats = data.get("stats") or {}
+            self.affinity_source = str(state_path)
+            self.social_tick = int(data.get("tick") or 0)
+            self.conversation_no = int(data.get("conversation_no") or 0)
+            self.sim_run_id = run_dir.name
+            self.sim_run_dir = run_dir
+            self.sim_config = {}
+            self.sim_error = None
+            return self.sim_status()
+
+    def delete_run(self, run_id: str) -> dict:
+        with self.sim_lock:
+            if self.sim_proc is not None and self.sim_proc.poll() is None:
+                raise ValueError("arrête la simulation avant de supprimer un run")
+            run_dir = self._run_dir(run_id)
+            if not run_dir.is_dir():
+                raise ValueError(f"run introuvable : {run_dir.name}")
+            shutil.rmtree(run_dir)
+            if self.sim_run_dir == run_dir:
+                self.social_reset()
+            return self.run_list()
+
+    def export_state(self) -> Path | None:
+        if self.sim_run_dir is not None:
+            path = self.sim_run_dir / "state.json"
+            if path.exists():
+                return path
+        if self.affinity_source:
+            path = Path(self.affinity_source)
+            if path.exists():
+                return path
+        return None
 
     def agent_list(self) -> dict:
         return {"agents": [{
@@ -610,6 +696,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(self.server.state.meta())
         elif self.path == "/api/sim/status":
             self._json(self.server.state.sim_status())
+        elif self.path == "/api/runs":
+            self._json(self.server.state.run_list())
+        elif self.path == "/api/sim/export":
+            path = self.server.state.export_state()
+            if path is None:
+                return self._error("aucun état à exporter", 404)
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{path.parent.name}-state.json"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path == "/api/surveys":
             self._json({"surveys": self.server.state.list_surveys()})
         elif self.path.startswith("/api/survey/status"):
@@ -665,15 +765,20 @@ class Handler(BaseHTTPRequestHandler):
         return agent, history, provider, model, body
 
     def do_POST(self):
-        if self.path in ("/api/sim/start", "/api/sim/stop", "/api/sim/reset"):
+        if self.path in ("/api/sim/start", "/api/sim/stop", "/api/sim/reset",
+                         "/api/sim/load", "/api/runs/delete"):
             try:
-                body = self._read_body() if self.path.endswith("start") else {}
+                body = self._read_body() if not self.path.endswith("stop") else {}
                 if self.path.endswith("start"):
                     payload = self.server.state.sim_start(body)
                 elif self.path.endswith("stop"):
                     payload = self.server.state.sim_stop()
-                else:
+                elif self.path.endswith("reset"):
                     payload = self.server.state.social_reset()
+                elif self.path.endswith("load"):
+                    payload = self.server.state.load_run(body.get("run_id", ""))
+                else:
+                    payload = self.server.state.delete_run(body.get("run_id", ""))
             except ValueError as exc:
                 return self._error(str(exc))
             except OSError as exc:
@@ -963,14 +1068,23 @@ INDEX = r"""<!doctype html>
         <label>Spark <input id="simspark" type="number" value="0.5" min="0" max="1" step="0.05"></label>
         <label>Groupes <input id="simgroup" type="number" value="0.35" min="0" max="1" step="0.05"></label>
         <label>Refus <input id="simrefusal" type="number" value="0.1" min="0" max="1" step="0.05"></label>
+        <label>Conv./tick <input id="simburst" type="number" value="4" min="1" max="64"></label>
+        <label>Parallèle <input id="simpar" type="number" value="4" min="1" max="32"></label>
         <label>Agents <input id="simlimit" type="number" value="" min="2" max="500" placeholder="tous"></label>
         <label class="wide">Run <input id="simrun" type="text" placeholder="auto (gui-horodatage)"></label>
+        <label class="wide">Runs <select id="simruns"><option value="">— choisir un run —</option></select></label>
         <label class="wide check"><input id="simfresh" type="checkbox" checked> repartir de zéro (efface le run)</label>
       </div>
       <div class="simrow">
         <button class="btn" id="simstart">Démarrer</button>
         <button class="btn ghost" id="simstop" disabled>Arrêter</button>
         <button class="btn ghost" id="simreset" title="efface l'état affiché (affinités, groupes, opinions)">Réinitialiser</button>
+      </div>
+      <div class="simrow">
+        <button class="btn ghost" id="simload">Charger</button>
+        <button class="btn ghost" id="simresume">Reprendre</button>
+        <button class="btn ghost" id="simdelete">Supprimer</button>
+        <button class="btn ghost" id="simexport">Exporter</button>
       </div>
       <div class="meta" id="siminfo">Aucune simulation lancée.</div>
       <div class="simevents" id="simevents"></div>
@@ -1513,6 +1627,7 @@ function initMotion(){
     MOTION.set(a.id, {
       x: 0.03 + rnd(a.id * 1.93) * 0.94,
       y: 0.03 + rnd(a.id * 7.31 + 4) * 0.94,
+      tx: null, ty: null,
       vx: 0, vy: 0,
       state: "idle",
       timer: 1.2 + rnd(a.id * 6.13 + 2) * 6.0,   // surtout immobile au départ
@@ -1589,6 +1704,15 @@ function stepAtlas(dt, t){
       const damp = Math.exp(-3.2 * dt);
       m.vx *= damp; m.vy *= damp;
       m.state = "idle"; m.hopVz = 0; m.hopZ *= Math.exp(-6 * dt);
+    } else if (m.tx != null){
+      // Position issue du run : on rejoint la cible en douceur au lieu de
+      // téléporter la bille à chaque rafraîchissement de l'état.
+      const k = 1 - Math.exp(-dt / 0.35);
+      const dx = m.tx - m.x, dy = m.ty - m.y;
+      m.x += dx * k; m.y += dy * k;
+      m.vx = dx * 0.25; m.vy = dy * 0.25;   // orientation des yeux
+      m.state = "idle"; m.hopVz = 0; m.hopZ *= Math.exp(-6 * dt);
+      m.timer = Math.max(m.timer, 1.5);      // pas de saut pendant le suivi
     } else if (m.state === "jump"){
       // En l'air : petite trajectoire balistique.
       m.hopVz -= 3.4 * dt;
@@ -2028,6 +2152,8 @@ function simBody(){
     spark_rate: +$("#simspark").value,
     group_rate: +$("#simgroup").value,
     refusal_rate: +$("#simrefusal").value,
+    conversations_per_tick: +$("#simburst").value || 1,
+    parallel: +$("#simpar").value || 1,
     limit: +$("#simlimit").value || null,
     run_id: ($("#simrun").value || "").trim(),
     reset: $("#simfresh").checked,
@@ -2085,7 +2211,7 @@ function applySimState(p){
     for (const [id, xy] of Object.entries(p.positions)){
       const m = MOTION.get(Number(id));
       if (m && Array.isArray(xy)){
-        m.x = clamp(+xy[0], 0, 1); m.y = clamp(+xy[1], 0, 1);
+        m.tx = clamp(+xy[0], 0, 1); m.ty = clamp(+xy[1], 0, 1);
       }
     }
   }
@@ -2099,6 +2225,7 @@ async function simPoll(){
   try {
     const p = await fetch("/api/sim/status").then(r => r.json());
     applySimState(p); renderSim(p);
+    if (!p.running) loadRuns();
     if (p.running) SIM_POLL = setTimeout(simPoll, 1000);
   } catch (err){
     $("#siminfo").textContent = "statut indisponible : " + err.message;
@@ -2136,6 +2263,7 @@ async function simReset(){
   btn.disabled = true;
   try {
     const p = await simPost("/api/sim/reset", {});
+    for (const m of MOTION.values()){ m.tx = null; m.ty = null; }
     if (S.meta){
       S.meta.affinity = p.affinity || {};
       S.meta.groups = p.groups || {};
@@ -2158,12 +2286,93 @@ async function simReset(){
 }
 $("#simreset").onclick = simReset;
 
+async function loadRuns(){
+  try {
+    const d = await fetch("/api/runs").then(r => r.json());
+    const sel = $("#simruns");
+    const current = sel.value;
+    sel.innerHTML = "";
+    sel.append(new Option("— choisir un run —", ""));
+    for (const run of (d.runs || [])){
+      const label = `${run.run_id} · t${run.tick} · ${run.conversations} conv.`;
+      sel.append(new Option(label, run.run_id));
+    }
+    if (current) sel.value = current;
+  } catch (err){ /* silencieux */ }
+}
+
+async function simLoad(){
+  const id = $("#simruns").value;
+  if (!id){ $("#siminfo").textContent = "choisis un run à charger"; return; }
+  try {
+    const p = await simPost("/api/sim/load", {run_id: id});
+    applySimState(p); renderSim(p);
+    $("#simrun").value = id;
+  } catch (err){
+    $("#siminfo").textContent = "échec : " + err.message;
+  }
+}
+
+async function simResume(){
+  const id = $("#simruns").value || ($("#simrun").value || "").trim();
+  if (!id){ $("#siminfo").textContent = "choisis un run à reprendre"; return; }
+  const body = simBody();
+  body.run_id = id; body.resume = id; body.reset = false;
+  try {
+    const p = await simPost("/api/sim/start", body);
+    renderSim(p); applySimState(p); simPoll();
+  } catch (err){
+    $("#siminfo").textContent = "échec : " + err.message;
+  }
+  loadRuns();
+}
+
+async function simDelete(){
+  const id = $("#simruns").value;
+  if (!id){ $("#siminfo").textContent = "choisis un run à supprimer"; return; }
+  if (!confirm(`Supprimer le run ${id} et tous ses fichiers ?`)) return;
+  try {
+    await simPost("/api/runs/delete", {run_id: id});
+    $("#simruns").value = "";
+    if (S.meta && S.meta.affinity_source &&
+        S.meta.affinity_source.includes("/" + id + "/")){
+      const p = await simPost("/api/sim/reset", {});
+      applySimState({run_id: null});
+      for (const m of MOTION.values()){ m.tx = null; m.ty = null; }
+      renderSim({running: false, run_id: null, tick: 0, stats: {},
+                 memory_pairs: 0, events: [], error: null});
+      if (S.meta){
+        S.meta.affinity = {}; S.meta.groups = {}; S.meta.opinions = {};
+        S.meta.affinity_stats = {}; S.meta.affinity_source = null;
+        S.meta.social_tick = 0; S.meta.conversation_no = 0;
+      }
+      renderAffinityStatus();
+      if (S.sel){ renderAffinity(S.sel); renderGroup(S.sel); renderOpinions(S.sel); }
+    }
+    loadRuns();
+  } catch (err){
+    $("#siminfo").textContent = "échec : " + err.message;
+  }
+}
+
+$("#simload").onclick = simLoad;
+$("#simresume").onclick = simResume;
+$("#simdelete").onclick = simDelete;
+$("#simexport").onclick = () => {
+  if (!S.meta || !S.meta.affinity_source){
+    $("#siminfo").textContent = "aucun état à exporter";
+    return;
+  }
+  window.location = "/api/sim/export";
+};
+
 const SAVED_PROVIDER = localStorage.getItem("provider");
 $("#provider").value = SAVED_PROVIDER || "mock";
 fillModels(localStorage.getItem("model"));
 new ResizeObserver(() => { if (!ATLAS_RAF) drawAtlasFrame(ATLAS_T); }).observe($("#scatter"));
 boot();
 simPoll();
+loadRuns();
 </script>
 </body>
 </html>

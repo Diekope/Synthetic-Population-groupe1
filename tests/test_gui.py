@@ -194,6 +194,78 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(meta["social_tick"], 0)
         self.assertEqual(meta["conversation_no"], 0)
 
+    def test_sim_export_returns_state_file(self):
+        run_id = "unittest-gui-export"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            run_dir.mkdir(parents=True)
+            (run_dir / "state.json").write_text(json.dumps({
+                "affinity": {}, "positions": {}, "groups": {}, "opinions": {},
+                "tick": 0, "conversation_no": 0,
+                "stats": {"conversations": 0, "refusals": 0},
+            }), encoding="utf-8")
+            status, _ = self._post("/api/sim/load", {"run_id": run_id})
+            self.assertEqual(status, 200)
+            raw = self._get("/api/sim/export", raw=True)
+            data = json.loads(raw)
+            self.assertIn("positions", data)
+            self.assertEqual(data["stats"]["conversations"], 0)
+        finally:
+            self._post("/api/runs/delete", {"run_id": run_id})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_run_list_load_resume_delete(self):
+        run_id = "unittest-gui-runs"
+        run_dir = ROOT / "social" / "runs" / run_id
+        try:
+            status, data = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 2,
+                "tick_seconds": 0, "spark_rate": 1, "group_rate": 0,
+                "refusal_rate": 0, "limit": 6, "run_id": run_id,
+                "reset": True,
+            })
+            self.assertEqual(status, 200, data)
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                state = self._get("/api/sim/status")
+                if not state["running"]:
+                    break
+                time.sleep(0.2)
+            runs = self._get("/api/runs")["runs"]
+            entry = next(r for r in runs if r["run_id"] == run_id)
+            self.assertEqual(entry["tick"], 2)
+            self.assertEqual(entry["conversations"], 2)
+
+            status, loaded = self._post("/api/sim/load", {"run_id": run_id})
+            self.assertEqual(status, 200)
+            self.assertEqual(loaded["run_id"], run_id)
+            self.assertEqual(loaded["tick"], 2)
+            self.assertIn("positions", loaded)
+
+            status, resumed = self._post("/api/sim/start", {
+                "provider": "mock", "model": "mock", "max_ticks": 1,
+                "tick_seconds": 0, "spark_rate": 1, "group_rate": 0,
+                "refusal_rate": 0, "limit": 6, "run_id": run_id,
+                "resume": run_id, "reset": False,
+            })
+            self.assertEqual(status, 200, resumed)
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                state = self._get("/api/sim/status")
+                if not state["running"]:
+                    break
+                time.sleep(0.2)
+            self.assertEqual(state["tick"], 3)
+            self.assertEqual(state["stats"]["conversations"], 3)
+
+            status, listed = self._post("/api/runs/delete", {"run_id": run_id})
+            self.assertEqual(status, 200)
+            self.assertNotIn(run_id, [r["run_id"] for r in listed["runs"]])
+            self.assertFalse(run_dir.exists())
+        finally:
+            self._post("/api/sim/stop", {})
+            shutil.rmtree(run_dir, ignore_errors=True)
+
     def test_index_has_group_and_opinion_panels(self):
         html = self._get("/", raw=True).decode()
         for marker in ('id="group"', 'id="opinions"', "renderGroup",
@@ -216,7 +288,10 @@ class GuiTest(unittest.TestCase):
         html = self._get("/", raw=True).decode()
         for control in ('id="simstart"', 'id="simstop"', 'id="simticks"',
                         'id="simspeed"', 'id="simlimit"', 'id="simfresh"',
-                        'id="simreset"', "/api/sim/start", "/api/sim/reset"):
+                        'id="simreset"', 'id="simburst"', 'id="simpar"',
+                        'id="simruns"', 'id="simload"', 'id="simresume"',
+                        'id="simdelete"', 'id="simexport"',
+                        "/api/sim/start", "/api/sim/reset", "/api/runs/delete"):
             self.assertIn(control, html)
         self.assertIn('placeholder="tous"', html)
 

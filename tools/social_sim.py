@@ -19,6 +19,11 @@ sujet déjà abordé avec la même personne est moins probable. Chaque agent a u
 opinion par sujet, initialisée de façon déterministe et rapprochée de celle de
 ses interlocuteurs après chaque échange.
 
+Le débit se règle avec ``--conversations-per-tick`` (plusieurs conversations
+par tick) et ``--parallel`` (génération simultanée). Les répliques sont
+produites en parallèle, puis leurs effets sont appliqués séquentiellement :
+le résultat reste identique à un run séquentiel, à seed égal.
+
 Sorties (dans le dossier du run) :
   config.json          paramètres du run
   events.jsonl         un événement par conversation (ou erreur)
@@ -43,6 +48,7 @@ import shutil
 import sys
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -139,6 +145,8 @@ class Simulation:
         opinion_influence: float = 0.15,
         repeat_penalty: float = 0.7,
         state_every: int = 0,
+        conversations_per_tick: int = 1,
+        parallel: int = 1,
         resume: dict | None = None,
         resume_source: str | None = None,
         agent_models: dict[int, str] | None = None,
@@ -164,6 +172,10 @@ class Simulation:
             raise SystemExit("opinion_influence doit être dans 0..1.")
         if not 0.0 <= repeat_penalty <= 1.0:
             raise SystemExit("repeat_penalty doit être dans 0..1.")
+        if conversations_per_tick < 1:
+            raise SystemExit("conversations_per_tick doit être au moins 1.")
+        if parallel < 1:
+            raise SystemExit("parallel doit être au moins 1.")
 
         self.agents = agents
         self.topics = topics
@@ -194,6 +206,8 @@ class Simulation:
         self.opinion_influence = max(0.0, min(1.0, float(opinion_influence)))
         self.repeat_penalty = max(0.0, min(1.0, float(repeat_penalty)))
         self.state_every = max(0, int(state_every))
+        self.conversations_per_tick = max(1, int(conversations_per_tick))
+        self.parallel = max(1, int(parallel))
         self.verbose = verbose
 
         self.rng = random.Random(seed)
@@ -271,6 +285,8 @@ class Simulation:
             "opinion_influence": self.opinion_influence,
             "repeat_penalty": self.repeat_penalty,
             "state_every": self.state_every,
+            "conversations_per_tick": self.conversations_per_tick,
+            "parallel": self.parallel,
             "agent_models": {str(k): v for k, v in sorted(self.agent_models.items())},
             "n_agents": len(self.agents),
             "n_topics": len(self.topics),
@@ -999,8 +1015,63 @@ class Simulation:
             is_group = False
             refusal_probability = 0.0
 
+        job = self._prepare_conversation(
+            initiator=initiator, partner=partner, topic=topic, turns=turns,
+            mode=mode, participants=participants, group=group)
+        if job.get("refused"):
+            return job["event"]
+        return self._finish_conversation(job, self._generate_conversation(job))
+
+    def _prepare_conversation(self, *, initiator=None, partner=None,
+                              topic=None, turns=None, mode: str = "random",
+                              participants=None, group: dict | None = None,
+                              ) -> dict:
+        """Résout les participants, le sujet et le refus, sans appeler le LLM.
+
+        La génération des répliques est faite séparément par
+        ``_generate_conversation``, ce qui permet de lancer plusieurs
+        conversations en parallèle avant d'appliquer leurs effets.
+        """
+        if participants is not None:
+            people: list[dict] = []
+            seen: set[int] = set()
+            for ref in participants:
+                agent = self._resolve_agent(ref)
+                if agent["id"] not in seen:
+                    people.append(agent)
+                    seen.add(agent["id"])
+            if len(people) < 2:
+                raise SystemExit("Il faut au moins deux agents distincts.")
+            initiator, partner = people[0], people[1]
+            dist = self._mean_distance(people)
+            affinity_before = self._mean_affinity(people)
+            is_group = group is not None or len(people) > 2
+            if is_group and mode == "manual":
+                mode = "group"
+            refusal_probability = 0.0
+        else:
+            if initiator is None and partner is None:
+                initiator, partner, dist = self.select_participants()
+            else:
+                if initiator is None:
+                    initiator = self.rng.choice(self.agents)
+                initiator = self._resolve_agent(initiator)
+                if partner is None:
+                    partner = self.by_id[self.select_partner(initiator["id"])]
+                partner = self._resolve_agent(partner)
+                dist = distance(self.positions[initiator["id"]],
+                                self.positions[partner["id"]])
+            if initiator["id"] == partner["id"]:
+                raise SystemExit("Un agent ne peut pas discuter avec lui-même.")
+            people = [initiator, partner]
+            affinity_before = self.affinity_between(initiator["id"],
+                                                    partner["id"])
+            is_group = False
+            refusal_probability = 0.0
+
         self.conversation_no += 1
-        cid = f"c{self.conversation_no:04d}"
+        number = self.conversation_no
+        cid = f"c{number:04d}"
 
         if not is_group:
             # Refus possible même quand la paire est imposée (--talk, --spark-rate 1).
@@ -1026,7 +1097,7 @@ class Simulation:
                           f"{initiator['prenom']} ({reason}) · "
                           f"affinité {affinity_before:.2f} → "
                           f"{affinity_after:.2f}")
-                return event
+                return {"refused": True, "event": event}
 
         topic = self._resolve_topic(topic, people)
         memory_note = self._memory_note(people, topic["id"])
@@ -1041,8 +1112,6 @@ class Simulation:
         elif self.rng.random() < 0.5:
             order.reverse()
 
-        transcript: list[dict] = []
-        errors: list[dict] = []
         sessions = {
             a["id"]: {
                 "agent": self._session_agent(a, topic, order, memory_note),
@@ -1068,7 +1137,40 @@ class Simulation:
             print(f"\n[tick {self.tick}] {cid} · {label} · "
                   f"sujet : {topic['text']} [{topic['category']}] · "
                   f"distance {dist:.3f} · affinité {affinity_before:.2f}")
+        return {
+            "refused": False,
+            "cid": cid,
+            "number": number,
+            "people": people,
+            "order": order,
+            "sessions": sessions,
+            "topic": topic,
+            "turns": turns,
+            "dist": dist,
+            "affinity_before": affinity_before,
+            "is_group": is_group,
+            "mode": mode,
+            "group": group,
+            "initiator": initiator,
+            "partner": partner,
+            "quiet": False,
+        }
 
+    def _generate_conversation(self, job: dict) -> dict:
+        """Joue les tours d'une conversation préparée, sans effet de bord.
+
+        Cette méthode est appelée dans un thread de travail quand plusieurs
+        conversations tournent en parallèle : elle ne touche ni aux compteurs,
+        ni aux affinités, ni aux fichiers.
+        """
+        order = job["order"]
+        topic = job["topic"]
+        sessions = job["sessions"]
+        turns = job["turns"]
+        quiet = job.get("quiet", False)
+        verbose = self.verbose and not quiet
+        transcript: list[dict] = []
+        errors: list[dict] = []
         for turn in range(turns):
             speaker = order[turn % len(order)]
             session = sessions[speaker["id"]]
@@ -1081,30 +1183,29 @@ class Simulation:
             try:
                 if self.provider == "mock":
                     text = self._mock_reply(speaker, topic, transcript, turn)
-                    if self.verbose:
+                    if verbose:
                         print(f"  {speaker['prenom']}> {text}")
                 else:
-                    do_stream = self.stream and self.verbose
+                    do_stream = self.stream and verbose
                     if do_stream:
                         print(f"  {speaker['prenom']}> ", end="", flush=True)
                     text = chat_agent.respond(
                         session["agent"], sent, self.provider, model,
                         temperature=self.temperature, max_tokens=self.max_tokens,
-                        seed=self.seed + self.conversation_no * 1000 + turn,
+                        seed=self.seed + job["number"] * 1000 + turn,
                         stream=do_stream,
                         on_token=(lambda piece: print(piece, end="", flush=True))
                         if do_stream else None)
                     if do_stream:
                         print()
-                    elif self.verbose:
+                    elif verbose:
                         print(f"  {speaker['prenom']}> {text}")
             except chat_agent.LLMError as exc:
-                if self.verbose and self.provider != "mock" and self.stream:
+                if verbose and self.provider != "mock" and self.stream:
                     print()
                 errors.append({"turn": turn + 1, "speaker": speaker["id"],
                                "error": str(exc)})
-                self.stats["errors"] += 1
-                if self.verbose:
+                if verbose:
                     print(f"  erreur : {exc}", file=sys.stderr)
                 break
             text = (text or "").strip()
@@ -1125,6 +1226,23 @@ class Simulation:
                         "role": "user",
                         "content": f"{speaker['prenom']} : {text}",
                     })
+        return {"transcript": transcript, "errors": errors}
+
+    def _finish_conversation(self, job: dict, generation: dict) -> dict:
+        """Applique les effets d'une conversation et journalise son événement."""
+        people = job["people"]
+        topic = job["topic"]
+        group = job["group"]
+        transcript = generation["transcript"]
+        errors = generation["errors"]
+        turns = job["turns"]
+        dist = job["dist"]
+        affinity_before = job["affinity_before"]
+        is_group = job["is_group"]
+        initiator, partner = job["initiator"], job["partner"]
+        cid = job["cid"]
+        quiet = job.get("quiet", False)
+        verbose = self.verbose and not quiet
 
         affinity_delta = self._affinity_delta(topic, transcript, turns, errors)
         spread, _ = self._opinion_spread(people, topic["id"])
@@ -1150,7 +1268,7 @@ class Simulation:
         else:
             affinity_after = self.adjust_affinity(
                 initiator["id"], partner["id"], affinity_delta)
-        if self.verbose:
+        if verbose:
             suffix = (f" · cohésion {cohesion_after:.2f}"
                       if cohesion_after is not None else "")
             print(f"  ── fin · {len(transcript)}/{turns} tour(s) · "
@@ -1162,18 +1280,18 @@ class Simulation:
             "type": "conversation",
             "conversation_id": cid,
             "tick": self.tick,
-            "mode": mode,
+            "mode": job["mode"],
             "topic": topic,
             "participants": [
                 {"id": a["id"], "name": f"{a['prenom']} {a['nom']}",
                  "model": self.model_for(a),
-                 "session": sessions[a["id"]]["session_id"]}
+                 "session": job["sessions"][a["id"]]["session_id"]}
                 for a in people
             ],
             "sessions": {
                 str(aid): {"id": s["session_id"], "model": s["model"],
                            "messages": len(s["history"])}
-                for aid, s in sorted(sessions.items())
+                for aid, s in sorted(job["sessions"].items())
             },
             "group_id": group["id"] if group is not None else None,
             "group": {
@@ -1200,21 +1318,66 @@ class Simulation:
         self._log_event(event)
         self.stats["conversations"] += 1
         self.stats["turns"] += len(transcript)
+        self.stats["errors"] += len(errors)
         if is_group:
             self.stats["group_conversations"] += 1
         return event
+
+    def _prepare_group_job(self) -> dict | None:
+        group = self._pick_group()
+        if group is None:
+            return None
+        members = [self.by_id[m] for m in group["members"] if m in self.by_id]
+        if len(members) < 2:
+            return None
+        turns = max(len(members),
+                    self.rng.randint(self.min_turns, self.max_turns))
+        return self._prepare_conversation(
+            participants=members, turns=turns, mode="group", group=group)
+
+    def _generate_batch(self, jobs: list[dict]) -> list[dict]:
+        workers = min(max(1, self.parallel), len(jobs))
+        if workers <= 1:
+            return [self._generate_conversation(job) for job in jobs]
+        # En parallèle, les répliques ne sont pas affichées : les flux
+        # s'entrelaceraient. Les événements restent complets.
+        for job in jobs:
+            job["quiet"] = True
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(self._generate_conversation, jobs))
 
     def step(self) -> dict | None:
         self.tick += 1
         self._move_agents()
         self._update_groups()
-        if len(self.agents) < 2 or self.rng.random() >= self.spark_rate:
+        if len(self.agents) < 2:
             return None
-        if self.groups and self.group_rate > 0 and self.rng.random() < self.group_rate:
-            event = self.run_group_conversation()
-            if event is not None:
-                return event
-        return self.run_conversation()
+        events: list[dict] = []
+        jobs: list[dict] = []
+        group_done = False
+        for _ in range(self.conversations_per_tick):
+            if self.rng.random() >= self.spark_rate:
+                continue
+            if (not group_done and self.groups and self.group_rate > 0
+                    and self.rng.random() < self.group_rate):
+                job = self._prepare_group_job()
+                if job is not None:
+                    group_done = True
+                    if job.get("refused"):
+                        events.append(job["event"])
+                    else:
+                        jobs.append(job)
+                    continue
+            job = self._prepare_conversation()
+            if job.get("refused"):
+                events.append(job["event"])
+            else:
+                jobs.append(job)
+        if jobs:
+            generations = self._generate_batch(jobs)
+            for job, generation in zip(jobs, generations):
+                events.append(self._finish_conversation(job, generation))
+        return events[-1] if events else None
 
     def run(self, max_ticks: int | None = None) -> dict:
         ticks = self.max_ticks if max_ticks is None else max(0, int(max_ticks))
@@ -1343,6 +1506,10 @@ def main() -> int:
                    help="poids d'un sujet déjà abordé avec la même personne (0..1)")
     p.add_argument("--state-every", type=int, default=0, metavar="N",
                    help="écrit state.json tous les N ticks (0 = seulement à la fin)")
+    p.add_argument("--conversations-per-tick", type=int, default=1, metavar="N",
+                   help="nombre maximal de conversations par tick (défaut : 1)")
+    p.add_argument("--parallel", type=int, default=1, metavar="N",
+                   help="conversations générées en parallèle (défaut : 1)")
     p.add_argument("--talk", nargs=2, metavar=("AGENT_A", "AGENT_B"),
                    help="fait discuter deux agents puis quitte (id, clé, nom ou 'random')")
     topic_group = p.add_mutually_exclusive_group()
@@ -1409,6 +1576,8 @@ def main() -> int:
         opinion_influence=args.opinion_influence,
         repeat_penalty=args.repeat_penalty,
         state_every=args.state_every,
+        conversations_per_tick=args.conversations_per_tick,
+        parallel=args.parallel,
         resume=resume_data,
         resume_source=str(resume_path) if resume_path is not None else None)
 
