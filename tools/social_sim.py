@@ -510,7 +510,7 @@ class Simulation:
     def _initial_opinion(self, aid: int, topic_id: str) -> float:
         """Opinion initiale stable, propre au couple agent/sujet."""
         digest = hashlib.sha256(
-            f"{self.seed}:{aid}:{topic_id}".encode("utf-8")).digest()
+            f"{self.seed}:{aid}:{topic_id}".encode()).digest()
         return 0.15 + (digest[0] / 255.0) * 0.7
 
     def opinion_of(self, aid: int, topic_id: str) -> float:

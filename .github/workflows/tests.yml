@@ -7,12 +7,32 @@ on:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
       - name: Vérifier que agents/ est à jour
         run: uv run python tools/build_agents.py constraint_cells.csv population.csv --check
+      - name: Lint (non bloquant)
+        run: uvx ruff check tools tests --output-format=github
+        continue-on-error: true
       - name: Tests
         run: uv run python -m unittest discover -s tests -v
+
+  gui-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Extraire et vérifier le JS de la GUI
+        run: |
+          python3 -c "import re,sys; sys.path.insert(0,'tools'); import gui; m=re.search(r'<script>(.*?)</script>', gui.INDEX, re.S); open('gui.js','w').write(m.group(1))"
+          node --check gui.js

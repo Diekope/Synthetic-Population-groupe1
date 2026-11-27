@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from collections import Counter, defaultdict
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -766,7 +766,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/surveys":
             self._json({"surveys": self.server.state.list_surveys()})
         elif self.path.startswith("/api/survey/status"):
-            from urllib.parse import urlparse, parse_qs
+            from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             job_id = (q.get("id") or [""])[0]
             try:

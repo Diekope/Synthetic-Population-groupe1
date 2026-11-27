@@ -10,3 +10,18 @@ dependencies = []
 # Rien n'est requis pour la GUI, la CLI, la sonde et l'évaluation (stdlib seule).
 # Ces paquets ne servent qu'aux outils de référence et aux tests d'intégration.
 dev = ["playwright>=1.40"]
+# Outils de référence (tools/reference_cpsat.py, tools/reference_ipf.py).
+reference = ["ortools>=9.8", "pandas>=2.0", "numpy>=1.26"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["out", "social", "agents"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+files = ["tools"]

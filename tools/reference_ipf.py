@@ -7,7 +7,10 @@ Un échantillon i.i.d. ne respecte les marges qu'en moyenne (pas exactement).
 
 Usage : python tools/reference_ipf.py constraint_cells.csv     (numpy requis)
 """
-import csv, sys, collections
+import collections
+import csv
+import sys
+
 import numpy as np
 
 sys.stdout.reconfigure(encoding='utf-8')

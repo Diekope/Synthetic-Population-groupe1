@@ -11,9 +11,7 @@ terminée.
 |---|---|---|
 | Capture `docs/gui.png` à jour | S | doc fidèle |
 | Export CSV des conversations | S | analyse externe |
-| Retry/backoff sur les appels LLM | S | robustesse |
-| Lint + typage (`ruff`, `mypy`) | M | dette technique |
-| CI GitHub Actions | M | non-régression |
+| Lint + typage (`ruff` configuré, `mypy` à faire) | M | dette technique |
 | Graphique d'évolution des opinions | M | lisibilité |
 | Réseau d'affinités interactif | L | compréhension |
 
@@ -83,7 +81,10 @@ suivantes avec une probabilité, et l'information se déforme.
 `--max-inflight` et un backoff quand le provider renvoie 429.
 - Où : `_generate_batch`, `chat_agent.respond`.
 
-### 2.2 Retry et reprise sur erreur LLM
+### 2.2 Retry et reprise sur erreur LLM (fait en partie)
+`chat_agent.py` réessaie déjà sur 429/5xx avec backoff (`RETRY_CODES`, `_backoff`).
+Reste : marquer l'événement en erreur dans `social_sim` sans casser le run.
+
 Réessayer les appels transitoires (timeout, 429, 5xx) avec backoff exponentiel,
 puis marquer l'événement en erreur sans casser le run.
 - Où : `chat_agent._open` / `respond`, `_generate_conversation`.
@@ -164,7 +165,10 @@ Ajouter `ruff` (format + lint) et `mypy` sur `tools/` et `tests/`, avec une
 configuration dans `pyproject.toml`.
 - Fini quand : `uv run ruff check .` et `uv run mypy tools` passent.
 
-### 4.2 CI GitHub Actions
+### 4.2 CI GitHub Actions (fait)
+`.github/workflows/tests.yml` : matrice 3.12/3.13, cache uv, `build_agents --check`,
+ruff, tests, `node --check` sur le JS de la GUI. Reste : rendre ruff bloquant.
+
 Matrice Python (3.11/3.12), `uv sync`, tests, `node --check` sur le JS extrait de
 la GUI, cache uv.
 - Fini quand : la CI tourne sur chaque PR.

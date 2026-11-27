@@ -39,7 +39,6 @@ import hashlib
 import json
 import random
 import re
-import shutil
 import subprocess
 import sys
 import tempfile

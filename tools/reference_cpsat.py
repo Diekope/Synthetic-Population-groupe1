@@ -1,7 +1,12 @@
 """Référence exacte (plan C) : max nombre de personas distinctes, marges exactes.
 Usage : python reference_cpsat.py contraintes.csv [temps_s] [population_initiale.csv|-] [sortie.csv]"""
-import sys, itertools, collections, pandas as pd
+import collections
+import itertools
+import sys
+
+import pandas as pd
 from ortools.sat.python import cp_model
+
 d = pd.read_csv(sys.argv[1]); limit = float(sys.argv[2]) if len(sys.argv) > 2 else 120
 tables = {}
 for r in d.itertuples():

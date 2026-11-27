@@ -53,7 +53,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat_agent  # noqa: E402
 
-
 # ---------------------------------------------------------------- questionnaire
 
 def load_survey(path: Path) -> dict:

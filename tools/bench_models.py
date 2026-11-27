@@ -130,7 +130,7 @@ def main() -> int:
         return 1
 
     system = persona_prompt(args.agents)
-    print(f"Machine cible : 8 Go de RAM (M2). Un modèle partagé par les 500 agents.\n")
+    print("Machine cible : 8 Go de RAM (M2). Un modèle partagé par les 500 agents.\n")
     print(f"{'modèle':<22}{'taille':>8}{'latence':>10}{'tok/s':>8}{'VRAM':>8}  extrait")
     print("-" * 100)
     rows = []
